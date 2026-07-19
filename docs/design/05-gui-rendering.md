@@ -40,3 +40,9 @@ Finder reveal, Quick Look, Settings, menu bar, notifications, (later) Keychain. 
 ## Non-goals
 
 Web shell as product · vendor branding · multi-OS GUI abstraction in v0
+
+## Reference UI
+
+./codex-reference.png
+
+Support light and dark mode. Keep GUI code simple and professional.

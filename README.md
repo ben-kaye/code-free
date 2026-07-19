@@ -22,7 +22,8 @@ apps/orchestrator/     # Node sidecar (WS + sessions)
 packages/protocol/     # zod wire schema
 packages/store/        # SQLite event log
 fixtures/              # adapter fixtures (Phase 2+)
-docs/design/           # product design
+docs/design/           # product design (contracts)
+docs/plan/             # implementation PR plans
 ```
 
 ## Setup

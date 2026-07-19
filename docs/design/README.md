@@ -1,5 +1,7 @@
 # Design
 
+Design docs are product contracts, not implementation trackers. PR plans live under [docs/plan/](../plan/README.md). Discipline: [AGENTS.md](../../AGENTS.md).
+
 | # | Doc |
 |---|-----|
 | 1 | [vision](./01-vision.md) |
