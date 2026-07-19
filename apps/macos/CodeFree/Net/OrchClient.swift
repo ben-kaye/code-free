@@ -103,19 +103,36 @@ actor OrchClient {
 
     // MARK: - Commands
 
-    func listSessions() async throws -> [SessionSummary] {
-        let result = try await request(SessionListCommand(requestId: newId()))
+    func listSessions(filter: String = "active") async throws -> [SessionSummary] {
+        let result = try await request(SessionListCommand(requestId: newId(), filter: filter))
         return try decodeSessions(result)
     }
 
-    func createSession(cwd: String, title: String? = nil) async throws -> SessionSummary {
+    func archiveSession(sessionId: String) async throws -> SessionSummary {
+        let result = try await request(
+            SessionArchiveCommand(requestId: newId(), sessionId: sessionId)
+        )
+        guard let data = result.data?.objectValue,
+              let sessionVal = data["session"]
+        else {
+            throw WireError.unexpectedMessage("session.archive missing session")
+        }
+        return try decodeValue(SessionSummary.self, from: sessionVal)
+    }
+
+    func createSession(
+        cwd: String,
+        title: String? = nil,
+        harnessId: String? = nil,
+        model: String? = nil
+    ) async throws -> SessionSummary {
         let result = try await request(
             SessionCreateCommand(
                 requestId: newId(),
                 cwd: cwd,
                 title: title,
-                harnessId: nil,
-                model: nil,
+                harnessId: harnessId,
+                model: model,
                 seed: nil
             )
         )
@@ -125,6 +142,16 @@ actor OrchClient {
             throw WireError.unexpectedMessage("session.create missing session")
         }
         return try decodeValue(SessionSummary.self, from: sessionVal)
+    }
+
+    func listHarnesses() async throws -> [HarnessInfo] {
+        let result = try await request(HarnessListCommand(requestId: newId()))
+        guard let data = result.data?.objectValue,
+              case .array(let arr) = data["harnesses"]
+        else {
+            return []
+        }
+        return try arr.map { try decodeValue(HarnessInfo.self, from: $0) }
     }
 
     func subscribe(sessionId: String, afterSeq: Int = 0) async throws {

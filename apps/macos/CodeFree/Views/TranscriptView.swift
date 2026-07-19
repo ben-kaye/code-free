@@ -12,22 +12,28 @@ struct TranscriptPane: View {
                 Divider()
                 ComposerView()
             } else {
-                emptyState
+                NewTaskHomeView()
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
 
     private func header(_ session: SessionSummary) -> some View {
-        HStack {
+        HStack(spacing: 12) {
             Text(session.displayTitle)
                 .font(.headline)
                 .lineLimit(1)
-            Spacer()
-            Text(session.cwd)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if session.isArchived {
+                Text("Archived")
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .foregroundStyle(.secondary)
+                    .help("Archived tasks are permanently deleted after 7 days")
+            }
+            Spacer(minLength: 8)
+            WorkspaceChip(workspacePath: session.cwd)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -54,26 +60,6 @@ struct TranscriptPane: View {
                 }
             }
         }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text("No session selected")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("Start a new chat or pick one from Recents.")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-            if case .ready = model.phase {
-                Button("New chat") { model.newSession() }
-                    .keyboardShortcut("n", modifiers: [.command])
-                    .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

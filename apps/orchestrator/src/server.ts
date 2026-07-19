@@ -41,6 +41,10 @@ export async function startOrchestrator(
   const token = ensureTokenFile(config.tokenFile);
   const store = new EventStore({ dataRoot: config.dataRoot });
   const sessions = new SessionManager(store);
+  const purged = sessions.purgeExpiredArchives();
+  if (purged > 0) {
+    log.info(`purged ${purged} archived session(s) older than 7 days`);
+  }
 
   const httpServer: HttpServer = createServer((_req, res) => {
     res.writeHead(426, { "Content-Type": "text/plain" });
@@ -158,7 +162,16 @@ export async function startOrchestrator(
             return ok(cmd.requestId, { session, event: started });
           }
           case "session.list": {
-            return ok(cmd.requestId, { sessions: sessions.list() });
+            const filter = cmd.filter ?? "active";
+            return ok(cmd.requestId, { sessions: sessions.list(filter), filter });
+          }
+          case "session.archive": {
+            const session = sessions.archive(cmd.sessionId);
+            // Stop fan-out; shell clears local selection/subscription.
+            subscribers.delete(cmd.sessionId);
+            st.subscriptions.delete(cmd.sessionId);
+            sessions.purgeExpiredArchives();
+            return ok(cmd.requestId, { session });
           }
           case "session.subscribe": {
             const summary = sessions.get(cmd.sessionId);

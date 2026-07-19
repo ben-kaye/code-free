@@ -14,10 +14,53 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     let createdAt: String
     let updatedAt: String
     let lastSeq: Int
+    /// Present when archived (soft-deleted); purged by orch after 7 days.
+    let archivedAt: String?
 
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
         return "Session \(id.prefix(8))"
+    }
+
+    var isArchived: Bool { archivedAt != nil }
+
+    init(
+        id: String,
+        title: String?,
+        cwd: String,
+        harnessId: String?,
+        model: String?,
+        createdAt: String,
+        updatedAt: String,
+        lastSeq: Int,
+        archivedAt: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.cwd = cwd
+        self.harnessId = harnessId
+        self.model = model
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.lastSeq = lastSeq
+        self.archivedAt = archivedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        cwd = try c.decode(String.self, forKey: .cwd)
+        harnessId = try c.decodeIfPresent(String.self, forKey: .harnessId)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decode(String.self, forKey: .updatedAt)
+        lastSeq = try c.decode(Int.self, forKey: .lastSeq)
+        archivedAt = try c.decodeIfPresent(String.self, forKey: .archivedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, cwd, harnessId, model, createdAt, updatedAt, lastSeq, archivedAt
     }
 }
 
@@ -72,9 +115,34 @@ struct SessionCreateCommand: Encodable, Sendable {
     let seed: String?
 }
 
+struct HarnessListCommand: Encodable, Sendable {
+    let kind: String = "harness.list"
+    let requestId: String
+}
+
+/// Harness descriptor from `harness.list` — id, display name, caps. No CLI/SDK details.
+struct HarnessInfo: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let caps: [String]
+}
+
 struct SessionListCommand: Encodable, Sendable {
     let kind: String = "session.list"
     let requestId: String
+    /// `"active"` or `"archived"`.
+    let filter: String
+
+    init(requestId: String, filter: String = "active") {
+        self.requestId = requestId
+        self.filter = filter
+    }
+}
+
+struct SessionArchiveCommand: Encodable, Sendable {
+    let kind: String = "session.archive"
+    let requestId: String
+    let sessionId: String
 }
 
 struct SessionSubscribeCommand: Encodable, Sendable {

@@ -9,6 +9,7 @@ struct CodeFreeApp: App {
         WindowGroup("Code Free") {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(model.workspaces)
                 .frame(minWidth: 900, minHeight: 560)
                 .onAppear {
                     appDelegate.model = model
@@ -18,10 +19,14 @@ struct CodeFreeApp: App {
         .defaultSize(width: 1180, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
-                    model.newSession()
+                Button("New Task") {
+                    model.newTask()
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+                Button("New Project…") {
+                    model.newProject()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
     }

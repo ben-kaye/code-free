@@ -34,7 +34,9 @@ Unknown types: ignore or generic card.
 
 ## Client → server
 
-`hello | project.* | session.{list,create,subscribe,unsubscribe,send,cancel,rename} | approval.respond | harness.list | models.list`
+`hello | project.* | session.{list,create,archive,subscribe,unsubscribe,send,cancel,rename} | approval.respond | harness.list | models.list`
+
+**Archive:** `session.archive` soft-deletes a session. `session.list` defaults to active sessions; `filter: "archived"` lists archives. Archived sessions are purged after **7 days** (orch on startup and after archive). Subscribe/replay remains allowed; send/rename/append are rejected.
 
 ## Caps
 

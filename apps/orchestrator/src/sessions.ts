@@ -1,5 +1,11 @@
 import type { EventFrame, EventDraft } from "@code-free/protocol";
-import { EventStore, type SessionRow } from "@code-free/store";
+import {
+  EventStore,
+  StoreError,
+  ARCHIVE_RETENTION_MS,
+  type SessionRow,
+  type SessionListFilter,
+} from "@code-free/store";
 
 export type SessionSummary = {
   id: string;
@@ -10,6 +16,8 @@ export type SessionSummary = {
   createdAt: string;
   updatedAt: string;
   lastSeq: number;
+  /** Present when the session is archived (soft-deleted). */
+  archivedAt: string | null;
 };
 
 /**
@@ -43,8 +51,8 @@ export class SessionManager {
     return { session: this.toSummary(row), started };
   }
 
-  list(): SessionSummary[] {
-    return this.store.listSessions().map((r) => this.toSummary(r));
+  list(filter: SessionListFilter = "active"): SessionSummary[] {
+    return this.store.listSessions(filter).map((r) => this.toSummary(r));
   }
 
   get(sessionId: string): SessionSummary | null {
@@ -53,11 +61,32 @@ export class SessionManager {
   }
 
   rename(sessionId: string, title: string): SessionSummary {
-    return this.toSummary(this.store.renameSession(sessionId, title));
+    try {
+      return this.toSummary(this.store.renameSession(sessionId, title));
+    } catch (err) {
+      throw mapStoreError(err);
+    }
+  }
+
+  archive(sessionId: string): SessionSummary {
+    try {
+      return this.toSummary(this.store.archiveSession(sessionId));
+    } catch (err) {
+      throw mapStoreError(err);
+    }
+  }
+
+  /** Drop archives older than 7 days. Returns count deleted. */
+  purgeExpiredArchives(): number {
+    return this.store.purgeExpiredArchives(ARCHIVE_RETENTION_MS);
   }
 
   append(sessionId: string, draft: EventDraft): EventFrame {
-    return this.store.appendEvent(sessionId, draft);
+    try {
+      return this.store.appendEvent(sessionId, draft);
+    } catch (err) {
+      throw mapStoreError(err);
+    }
   }
 
   eventsAfter(sessionId: string, afterSeq: number): EventFrame[] {
@@ -73,32 +102,40 @@ export class SessionManager {
    * is honest rather than hanging on a fake turn.
    */
   sendUserMessage(sessionId: string, text: string): EventFrame[] {
-    if (!this.store.getSession(sessionId)) {
-      throw new SessionError("session_not_found", `Session not found: ${sessionId}`);
+    try {
+      if (!this.store.getSession(sessionId)) {
+        throw new SessionError("session_not_found", `Session not found: ${sessionId}`);
+      }
+      const user = this.store.appendEvent(sessionId, {
+        type: "message.user",
+        payload: { text, id: cryptoRandomId() },
+      });
+      const err = this.store.appendEvent(sessionId, {
+        type: "session.error",
+        payload: {
+          code: "no_adapter",
+          message:
+            "No harness adapter configured (Phase 1). User message was recorded; attach an adapter in a later phase.",
+        },
+      });
+      return [user, err];
+    } catch (err) {
+      throw mapStoreError(err);
     }
-    const user = this.store.appendEvent(sessionId, {
-      type: "message.user",
-      payload: { text, id: cryptoRandomId() },
-    });
-    const err = this.store.appendEvent(sessionId, {
-      type: "session.error",
-      payload: {
-        code: "no_adapter",
-        message:
-          "No harness adapter configured (Phase 1). User message was recorded; attach an adapter in a later phase.",
-      },
-    });
-    return [user, err];
   }
 
   cancel(sessionId: string): EventFrame {
-    if (!this.store.getSession(sessionId)) {
-      throw new SessionError("session_not_found", `Session not found: ${sessionId}`);
+    try {
+      if (!this.store.getSession(sessionId)) {
+        throw new SessionError("session_not_found", `Session not found: ${sessionId}`);
+      }
+      return this.store.appendEvent(sessionId, {
+        type: "session.ended",
+        payload: { reason: "cancel", note: "No active turn (Phase 1 stub)" },
+      });
+    } catch (err) {
+      throw mapStoreError(err);
     }
-    return this.store.appendEvent(sessionId, {
-      type: "session.ended",
-      payload: { reason: "cancel", note: "No active turn (Phase 1 stub)" },
-    });
   }
 
   private toSummary(row: SessionRow): SessionSummary {
@@ -111,6 +148,7 @@ export class SessionManager {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastSeq: this.store.lastSeq(row.id),
+      archivedAt: row.archivedAt,
     };
   }
 }
@@ -122,6 +160,16 @@ export class SessionError extends Error {
     this.name = "SessionError";
     this.code = code;
   }
+}
+
+function mapStoreError(err: unknown): never {
+  if (err instanceof StoreError) {
+    throw new SessionError(err.code, err.message);
+  }
+  if (err instanceof SessionError) {
+    throw err;
+  }
+  throw err;
 }
 
 function cryptoRandomId(): string {
