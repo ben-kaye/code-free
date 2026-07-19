@@ -78,6 +78,88 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertTrue(items[1].text.contains("Running"))
     }
 
+    func testToolCoalesceByCallIdNotName() {
+        let events = [
+            event(seq: 1, type: "tool.started", payload: [
+                "id": .string("call_1"),
+                "title": .string("Read file"),
+            ]),
+            event(seq: 2, type: "tool.started", payload: [
+                "id": .string("call_2"),
+                "title": .string("Read file"),
+            ]),
+            event(seq: 3, type: "tool.done", payload: [
+                "id": .string("call_1"),
+            ]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].messageId, "call_1")
+        XCTAssertEqual(items[1].messageId, "call_2")
+        XCTAssertTrue(items[0].text.contains("Read file"))
+        XCTAssertTrue(items[0].text.contains("Done"))
+        XCTAssertTrue(items[1].text.contains("Running"))
+    }
+
+    func testToolDoneKeepsTitleFromStart() {
+        let events = [
+            event(seq: 1, type: "tool.started", payload: [
+                "id": .string("c1"),
+                "title": .string("Shell"),
+                "summary": .string("ls"),
+            ]),
+            event(seq: 2, type: "tool.done", payload: [
+                "id": .string("c1"),
+            ]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertTrue(items[0].text.hasPrefix("Shell · Done"))
+    }
+
+    func testMessageDoneReplacesText() {
+        let events = [
+            event(seq: 1, type: "message.delta", payload: [
+                "id": .string("a"),
+                "text": .string("partial"),
+            ]),
+            event(seq: 2, type: "message.done", payload: [
+                "id": .string("a"),
+                "text": .string("final answer"),
+            ]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].text, "final answer")
+    }
+
+    func testThinkingDeltaMerges() {
+        let events = [
+            event(seq: 1, type: "thinking.delta", payload: [
+                "id": .string("t1"),
+                "text": .string("hmm "),
+            ]),
+            event(seq: 2, type: "thinking.delta", payload: [
+                "id": .string("t1"),
+                "text": .string("ok"),
+            ]),
+            event(seq: 3, type: "thinking.done", payload: ["id": .string("t1")]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].kind, .thinking)
+        XCTAssertEqual(items[0].text, "hmm ok")
+    }
+
+    func testTurnEndTiming() {
+        let items = TranscriptReducer.reduce([
+            event(seq: 1, type: "status.turn_end", payload: ["durationMs": .number(1500)]),
+        ])
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].kind, .timing)
+        XCTAssertTrue(items[0].text.contains("1.5"))
+    }
+
     private func event(seq: Int, type: String, payload: [String: JSONValue]) -> EventFrame {
         // Build via JSON round-trip to use Decodable init
         let dict: [String: Any] = [

@@ -12,6 +12,10 @@ settings:
     PRODUCT_NAME: Code Free
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+packages:
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath
+    from: 1.7.3
 targets:
   CodeFree:
     type: application
@@ -20,6 +24,8 @@ targets:
       - path: CodeFree
         excludes:
           - "**/*Tests.swift"
+    dependencies:
+      - package: SwiftMath
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ben-kaye.code-free

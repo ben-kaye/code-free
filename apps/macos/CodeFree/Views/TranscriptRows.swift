@@ -9,8 +9,7 @@ struct TranscriptRow: View {
         case .user:
             HStack {
                 Spacer(minLength: 40)
-                Text(item.text)
-                    .textSelection(.enabled)
+                ChatMarkdownView(source: item.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(
@@ -19,22 +18,21 @@ struct TranscriptRow: View {
                     )
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("You: \(item.text)")
+            .accessibilityLabel("You: \(Self.a11ySummary(item.text))")
 
         case .assistant:
             VStack(alignment: .leading, spacing: 4) {
                 Text("Assistant")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
-                Text(item.text)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ChatMarkdownView(source: item.text)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Assistant: \(item.text)")
+            .accessibilityLabel("Assistant: \(Self.a11ySummary(item.text))")
 
         case .thinking:
             DisclosureGroup(isExpanded: $thinkingExpanded) {
+                // Plain text — thinking streams are noisy for full markdown/math.
                 Text(item.text)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -80,7 +78,7 @@ struct TranscriptRow: View {
                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Error: \(item.text)")
+            .accessibilityLabel("Error: \(Self.a11ySummary(item.text))")
 
         case .timing:
             Text(item.text)
@@ -98,7 +96,7 @@ struct TranscriptRow: View {
                     Color.primary.opacity(0.05),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
-                .accessibilityLabel("Tool: \(item.text)")
+                .accessibilityLabel("Tool: \(Self.a11ySummary(item.text))")
 
         case .debug:
             Text(item.text)
@@ -110,12 +108,7 @@ struct TranscriptRow: View {
     @State private var didInitThinking = false
 
     private var thinkingSummary: String {
-        let compact = item.text
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if compact.isEmpty { return "Thinking" }
-        if compact.count <= 48 { return compact }
-        return String(compact.prefix(48)) + "…"
+        Self.a11ySummary(item.text, limit: 48, empty: "Thinking")
     }
 
     private var toolIcon: String {
@@ -126,5 +119,19 @@ struct TranscriptRow: View {
             return "checkmark.circle"
         }
         return "wrench.and.screwdriver"
+    }
+
+    /// Compact label for VoiceOver — full text is still selectable in the row content.
+    private static func a11ySummary(
+        _ text: String,
+        limit: Int = 160,
+        empty: String = "Empty message"
+    ) -> String {
+        let compact = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if compact.isEmpty { return empty }
+        if compact.count <= limit { return compact }
+        return String(compact.prefix(limit)) + "…"
     }
 }

@@ -212,9 +212,13 @@ enum TranscriptReducer {
             )
 
         case "tool.started", "tool.progress", "tool.done", "tool.error":
-            let name = payload["name"]?.stringValue
+            // Prefer call id (adapters emit `id`); fall back to display name for sparse payloads.
+            let callId = payload["id"]?.stringValue
+                ?? payload["callId"]?.stringValue
+                ?? payload["toolCallId"]?.stringValue
+            let incomingName = payload["title"]?.stringValue
+                ?? payload["name"]?.stringValue
                 ?? payload["tool"]?.stringValue
-                ?? "tool"
             let detail = payload["summary"]?.stringValue
                 ?? payload["message"]?.stringValue
             let phase: String = {
@@ -226,24 +230,36 @@ enum TranscriptReducer {
                 default: return event.type
                 }
             }()
-            let text: String = {
-                if let detail, !detail.isEmpty, detail != event.type {
-                    return "\(name) · \(phase) — \(detail)"
+
+            // Collapse lifecycle of the same tool call into one row (by call id, not display name).
+            let existingIdx: Int? = {
+                if let callId {
+                    return items.lastIndex(where: { $0.kind == .tool && $0.messageId == callId })
                 }
-                return "\(name) · \(phase)"
+                // No id: only coalesce onto a still-open row with the same display name.
+                guard let incomingName else { return nil }
+                return items.lastIndex(where: { item in
+                    item.kind == .tool
+                        && item.messageId == incomingName
+                        && Self.toolIsOpen(item.text)
+                })
             }()
-            // Collapse lifecycle of the same open tool into one row.
-            if let idx = items.lastIndex(where: { $0.kind == .tool && $0.messageId == name }) {
+
+            if let idx = existingIdx {
                 let prev = items[idx]
-                let isOpen = prev.text.contains("· Running") || prev.text.contains("· Working")
+                let name = incomingName ?? Self.toolName(from: prev.text) ?? "tool"
+                let text = Self.toolText(name: name, phase: phase, detail: detail, eventType: event.type)
+                let isOpen = Self.toolIsOpen(prev.text)
                 if event.type == "tool.started", !isOpen {
+                    // Same id after completion → new invocation (rare); append.
+                    let key = callId ?? incomingName ?? name
                     items.append(
                         TranscriptItem(
                             id: "\(event.seq)-tool",
                             kind: .tool,
                             text: text,
                             seq: event.seq,
-                            messageId: name
+                            messageId: key
                         )
                     )
                 } else {
@@ -252,17 +268,20 @@ enum TranscriptReducer {
                         kind: .tool,
                         text: text,
                         seq: event.seq,
-                        messageId: name
+                        messageId: prev.messageId
                     )
                 }
             } else {
+                let name = incomingName ?? "tool"
+                let key = callId ?? name
+                let text = Self.toolText(name: name, phase: phase, detail: detail, eventType: event.type)
                 items.append(
                     TranscriptItem(
                         id: "\(event.seq)-tool",
                         kind: .tool,
                         text: text,
                         seq: event.seq,
-                        messageId: name
+                        messageId: key
                     )
                 )
             }
@@ -283,5 +302,30 @@ enum TranscriptReducer {
             )
             #endif
         }
+    }
+
+    // MARK: Tool row helpers
+
+    private static func toolIsOpen(_ text: String) -> Bool {
+        text.contains("· Running") || text.contains("· Working")
+    }
+
+    /// Display name is the prefix before the first " · " phase marker.
+    private static func toolName(from text: String) -> String? {
+        guard let range = text.range(of: " · ") else { return nil }
+        let name = String(text[..<range.lowerBound])
+        return name.isEmpty ? nil : name
+    }
+
+    private static func toolText(
+        name: String,
+        phase: String,
+        detail: String?,
+        eventType: String
+    ) -> String {
+        if let detail, !detail.isEmpty, detail != eventType {
+            return "\(name) · \(phase) — \(detail)"
+        }
+        return "\(name) · \(phase)"
     }
 }
