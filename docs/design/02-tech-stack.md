@@ -41,7 +41,7 @@ Prefer well-maintained libraries; invent only product logic (sessions, adapter m
 | SQLite | better-sqlite3 or drizzle/kysely over it | Homegrown file log as primary store |
 | Process / spawn | Node `child_process` (+ thin wrapper only if needed) | Custom process supervisor frameworks |
 | CLI flags | something like `util.parseArgs` / commander / cac | DIY argv |
-| Tests / fixtures | vitest (or project standard) + recorded jsonl | One-off harness mocks with no replay |
+| Tests / fixtures | vitest (or project standard) + recorded jsonl (adapter churn) | One-off harness mocks with no recorded streams |
 | Shell UI / async (macOS) | SwiftUI, Foundation, structured concurrency | Extra GUI frameworks, webview product shell |
 
 **Own:** event semantics, adapter boundary, policy, Outputs UX, harness mapping.  

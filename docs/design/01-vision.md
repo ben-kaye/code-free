@@ -10,7 +10,7 @@
 - GUI detached (never spawns harness)
 - **Per-platform shell** using that OS’s native UI framework (not a shared web/Electron UI)
 - Semantic event stream + custom artifact viewers
-- Replayable sessions (SQLite)
+- **Durable session history** — SQLite event log; reopen a task and see what happened (same reduce path as live)
 - Unified approvals/policy
 
 ## Non-goals (v0)
@@ -22,11 +22,13 @@ Narrow **scope**, not quality. Ship less surface; every shipped path is producti
 - **Ship** non-macOS shells (architecture allows later native shells; v0 is macOS only)
 - Shared cross-platform GUI toolkit / webview-as-product shell
 - Cloud sync, multi-user, marketplace, scheduled jobs
+- **Replay as a product feature** — no “re-run this session,” time-travel debugger, or raw-log browser as UX. History is reopen + reduce; recovery is resubscribe/`afterSeq`, not a mode
+- Full transcript dump as default handoff seed (summarize → new session only)
 
 ## Principles
 
 1. **Production-ready from day one** — no prototype architecture, no “rewrite the seam later.” Thin product; durable design. (See bar below.)
-2. Event log = source of truth
+2. **Event log = source of truth** — monotonic semantic events per session; UI projects from the log (live stream and reopen share one reducer). Not a second in-memory chat model. Optional `raw` / file logs are debug aids, not truth
 3. Caps, not fake parity
 4. Semantic + optional raw streams
 5. Second adapter validates abstraction
@@ -44,13 +46,29 @@ Every design and implementation that ships must satisfy:
 | Durable | Restart / crash / kill does not corrupt the event log or strand the user without recovery |
 | Secure (local) | Bind loopback only; token-gated IPC; secrets not in logs; data-root permissions sane |
 | Validated | Protocol frames validated at boundaries (zod / Codable); reject garbage loudly |
-| Observable | Structured logs; failures surface as events or UI, never silent |
+| Observable | Structured orch logs for operators; product failures surface as events or UI, never silent |
 | Recoverable | WS drop → resubscribe + gap fill; child crash → session.error; transcript preserved |
 | Honest | Missing caps disabled or labeled — never fake parity |
 | Tested | Fixtures + automated tests for protocol, store, adapters on the critical path |
 | Versioned | `protocolVersion` + schema; breaking changes intentional |
 
 **Not** production-ready: throwaway IPC, in-memory-only “history,” unbound ports, unvalidated JSON, “dev token,” ship-without-fixtures, or seams we plan to replace for the same job.
+
+### Event log — what must hold
+
+| Must | Meaning |
+|------|---------|
+| Durable semantic log | Orch single-writes events; `seq` only after durable append |
+| History | Reopen task → snapshot/events → same UI projection as live |
+| One projector | Shell: `transcript = reduce(events)`; no separate live vs history codepaths for the same cards |
+| Recovery | Gap fill via `afterSeq` when transport drops; harness may keep running |
+
+| Not the job | Meaning |
+|-------------|---------|
+| Product “Replay” | Users do not re-execute past turns from the log |
+| Ops log browser | `--log-dir` / process logs are for debug, not session UX |
+| Fixture streams | Recorded ACP/jsonl under `fixtures/` are adapter tests against CLI churn |
+| Parallel truths | FS watch of Outputs still writes `artifact.*` into the event log; watch alone is not history |
 
 ## Done when
 

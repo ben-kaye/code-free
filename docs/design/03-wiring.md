@@ -25,6 +25,21 @@ Transport (WS now, UDS later) must not change event types.
 
 **Host production rules:** loopback bind; token before any command; endpoint+token only via agreed channel (stdout once or token-file), never guessable fixed secrets.
 
+## Event log (load-bearing)
+
+The durable **semantic event log** is why the product is not a disposable chat pane. Users care that **history survives** and **turns do not corrupt**; they do not care about `seq` or “replay mode.”
+
+| Layer | Role |
+|-------|------|
+| SQLite event log | Source of truth per session (`seq`, type, payload) |
+| Live stream | Same events pushed after append; shell reduces as they arrive |
+| Reopen / snapshot | Shell loads events and reduces — identical projection to live |
+| `afterSeq` subscribe | Recovery gap fill after WS drop; not a user-facing feature |
+| Orch file logs (`--log-dir`) | Operator observability only |
+| Adapter fixtures | Recorded harness streams for tests; not product history |
+
+**Rule of thumb:** if the UI shows it in a session, it was (or must be) an event in the log. Second harness, artifacts, and approvals all hang off this spine.
+
 ## Rules
 
 1. App never holds harness pid
@@ -53,6 +68,7 @@ Fidelity: structured > jsonl > pty(lossy)
 | Approval | approval.requested → policy or GUI → adapter.approve |
 | Artifact | artifact.created/updated (adapter emit and/or Outputs FS watch → durable events) → shell open/reveal |
 | Cancel | adapter.cancel → session.ended |
+| Reopen history | subscribe (afterSeq 0 or last) → snapshot of log → shell reduce (not re-run agent) |
 | Reconnect | subscribe afterSeq → gap fill; child keeps running |
 
 ## Project

@@ -1,6 +1,6 @@
 # Deliverables
 
-**North star:** native platform shell (v0: macOS SwiftUI) → chat harness → Outputs + timing → reopen history → second harness same shell.
+**North star:** native platform shell (v0: macOS SwiftUI) → chat harness → Outputs + timing → reopen history (event log reduce) → second harness same shell.
 
 **Quality bar:** every phase exit includes production-ready behavior for what it ships (durable log, auth’d IPC, validated protocol, tests/fixtures, recoverable failures). No “prototype then replace” on core seams. See [vision](./01-vision.md) production bar.
 
@@ -9,7 +9,7 @@ Phase *exit criteria* live here. PR stacks and cut order live under [docs/plan/]
 | Phase | Ship | Exit |
 |------:|------|------|
 | 0 | design docs | stack + first adapter agreed; production bar locked; [open questions](./07-open-questions.md) cleared |
-| 1 | orch + protocol + sqlite + WS | replay after restart; token + loopback; schema validation; store/protocol tests |
+| 1 | orch + protocol + sqlite + WS | history after restart (durable log + snapshot); token + loopback; schema validation; store/protocol tests |
 | 2 | first adapter (**Grok Build**) | headless stream → semantic; cancel; fixtures; crash → session.error |
 | 3 | SwiftUI shell + sidecar launch | full chat in `.app`; reopen history; reconnect UI; hybrid lifecycle (busy reattach) |
 | 4 | Outputs, viewers, approvals | FS watch + events → Outputs; one custom viewer; approval path real or honestly capped |
@@ -24,7 +24,7 @@ PTY tier · worktrees · multi-window · citations · schedule · remote orch ·
 
 | Risk | Mitigation (from day one) |
 |------|---------------------------|
-| CLI churn | Adapter fixtures / recorded streams |
+| CLI churn | Adapter fixtures / recorded streams (test-only; not user history) |
 | Approval gaps | Honest caps; never fake approve UX |
 | Node bundle | Same orch binary path; packaging not redesign |
 | Protocol drift | version + zod schema + tests; Codable or codegen |

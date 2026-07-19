@@ -12,7 +12,7 @@ MacOS via SwiftUI first. Other platforms to be developed.
 | **Domain** | [code.ben-kaye.com](https://code.ben-kaye.com) |
 | **Bundle id** | `com.ben-kaye.code-free` |
 | **License** | [MIT](./LICENSE) |
-| **Status** | Early development — **Phase 2** (first adapter + orch host); Phase 3 shell speaks protocol only |
+| **Status** | Early development — **Phase 3 complete** (shell + sidecar + reconnect + hybrid reattach); Phase 4 Outputs/approvals next |
 
 Design contracts: [`docs/design/`](./docs/design/README.md) · Contributing: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
@@ -30,17 +30,18 @@ Native platform shell  →  Node orchestrator  →  adapter  →  harness CLI
 - **Adapters** — translate one harness’s stream into the shared semantic protocol.
 - **Protocol** — versioned, validated at the boundary (`packages/protocol`).
 
-The event log is the source of truth. Missing harness abilities are **capped or labeled** — never faked.
+The **durable event log** is the source of truth: live stream and reopen share one reduce path (history, not a product “replay” mode). Missing harness abilities are **capped or labeled** — never faked. See [vision → Event log](./docs/design/01-vision.md).
 
 ## Features (current / direction)
 
 | Area | Today | Direction |
 |------|--------|-----------|
-| Chat + stream | Grok Build via ACP when `grok` is available | Second harness (Codex) behind the same shell |
-| History | SQLite under data root; reopen → replay | Outputs, viewers, real approvals |
-| UI shell | SwiftUI macOS | Additional **native** shells per OS (same protocol) |
+| Chat + stream | Grok Build via ACP when `grok` is available; honest `session.error` if not | Second harness (Codex) behind the same shell |
+| History | SQLite event log; reopen task → same transcript as live | Outputs, viewers, real approvals (still log events) |
+| Recovery | WS auto-reconnect + `afterSeq` gap-fill; hybrid busy reattach | Keep recovery boring; no log-browser UX |
+| UI shell | SwiftUI macOS: projects, transcript, composer, harness/model pickers | Phase 4+ Outputs/approvals chrome |
 | Security (local) | Loopback bind, token on `hello`, token file `0600` | Same bar for packaging / release |
-| Caps | Protocol carries capabilities | UI driven only by caps, not harness id |
+| Caps | `harness.list` / `models.list` drive pickers; missing abilities not faked | Approvals UI only when cap on; full cap-driven surface |
 
 Non-goals for v0 (by design): building our own agent, Mac App Store hard sandbox, shipping non-macOS shells yet, Electron/webview product UI, cloud sync, multi-user, marketplace. Architecture still targets **native UI per platform**. See [vision](./docs/design/01-vision.md).
 
@@ -99,7 +100,9 @@ The scheme sets `CODE_FREE_REPO_ROOT` for monorepo orch discovery. Data and toke
 
 Orchestrator resolution: `CODE_FREE_ORCH` → monorepo `apps/orchestrator` → `code-free-orch` on `PATH`.
 
-With Grok installed and authenticated, home composer (or New task) → send streams assistant deltas (and tools when the harness uses them). Without a binary, the user message is still recorded and a clear `session.error` surfaces — no hang. Quit idle → SIGTERM sidecar; reopen → sessions and transcript replay from SQLite.
+With Grok installed and authenticated, home composer (or New task) → send streams assistant deltas (and tools when the harness uses them). Without a binary, the user message is still recorded and a clear `session.error` surfaces — no hang.
+
+**Lifecycle (hybrid):** idle quit → SIGTERM sidecar; quit mid-turn → orch keeps running and the next launch reattaches via the saved endpoint. WS drop → auto-reconnect and `subscribe(afterSeq:)` gap-fill without wiping the transcript. Reopen always re-reduces history from the SQLite event log (same path as live).
 
 ## Repository layout
 

@@ -26,7 +26,7 @@ IA above is product shape; each shell maps it with native controls (NavigationSp
 ## Rules
 
 - No harness TUI in the shell
-- Transcript = reduce(events); live == replay
+- **Transcript = reduce(events); live == history** — one projector for streaming and for reopen; “replay” means re-reduce the log, not re-run the agent or open a log browser
 - Unknown event → skip/debug
 - No harness SDKs/CLI templates in the app — protocol only
 - Paths from events are opaque; native open/reveal stays here
@@ -44,7 +44,7 @@ Platform chrome stays in the shell. On macOS: Finder reveal, Quick Look, Setting
 
 ## Non-goals
 
-Web shell as product · vendor branding · one shared multi-OS GUI abstraction as the product (Electron/Tauri/etc.) · shipping non-macOS shells in v0
+Web shell as product · vendor branding · one shared multi-OS GUI abstraction as the product (Electron/Tauri/etc.) · shipping non-macOS shells in v0 · session “Replay” / time-travel / ops log viewer as product chrome
 
 ## Reference UI
 

@@ -8,6 +8,8 @@ Orch stamps `sessionId, seq, ts`. Adapters omit seq/ts.
 
 **Production wire rules:** validate every client command; stamp `seq` only after durable append (or equivalent crash-safe ordering); unknown event *types* may be ignored by clients; unknown/invalid *commands* rejected; never break monotonic seq; `protocolVersion` negotiated on `hello`.
 
+**Log vs transport:** the event stream is the durable product model (history + live). Snapshots and `afterSeq` gap fill re-deliver log rows; they do not re-execute the harness. `log` / `raw` event types are optional debug surface on the same channel — not a second history store.
+
 ## Server → client
 
 `hello | snapshot | event | error`
@@ -36,7 +38,7 @@ Unknown types: ignore or generic card.
 
 `hello | project.* | session.{list,create,archive,subscribe,unsubscribe,send,cancel,rename} | approval.respond | harness.list | models.list`
 
-**Archive:** `session.archive` soft-deletes a session. `session.list` defaults to active sessions; `filter: "archived"` lists archives. Archived sessions are purged after **7 days** (orch on startup and after archive). Subscribe/replay remains allowed; send/rename/append are rejected.
+**Archive:** `session.archive` soft-deletes a session. `session.list` defaults to active sessions; `filter: "archived"` lists archives. Archived sessions are purged after **7 days** (orch on startup and after archive). Subscribe and history reduce remain allowed (read-only); send/rename/append are rejected.
 
 ## Caps
 

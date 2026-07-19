@@ -44,7 +44,7 @@ The Xcode scheme sets `CODE_FREE_REPO_ROOT` so the app can spawn the orchestrato
 | Owner | Responsibility |
 |-------|----------------|
 | Platform shell | Native UI (v0: SwiftUI macOS), host lifecycle, platform data paths |
-| Orchestrator | Sessions, WS, durable event log, adapter host |
+| Orchestrator | Sessions, WS, durable event log (product history), adapter host |
 | Adapters | Harness I/O only — map to/from the protocol |
 | `packages/protocol` | Wire schema; design doc [04](./docs/design/04-event-protocol.md) stays aligned |
 

@@ -1,6 +1,11 @@
 # AGENTS.md
 
-Native per-platform GUI (v0: macOS SwiftUI) + harness-agnostic Node orchestrator. Shell owns UI + platform/host; adapters own harness I/O; event log is truth. Prefer mature libs for infra; own product semantics. Production-ready from day one: thin scope, no prototype seams.
+Per-platform native GUI and harness-agnostic Node orchestrator.
+
+
+## Rules
+
+Prefer mature libs for infra; own product semantics. Production-ready from day one: thin scope, no prototype seams.
 
 ## Document discipline
 
