@@ -1,0 +1,57 @@
+name: CodeFree
+options:
+  bundleIdPrefix: com.ben-kaye
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    PRODUCT_NAME: Code Free
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  CodeFree:
+    type: application
+    platform: macOS
+    sources:
+      - path: CodeFree
+        excludes:
+          - "**/*Tests.swift"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ben-kaye.code-free
+        PRODUCT_MODULE_NAME: CodeFree
+        INFOPLIST_KEY_CFBundleDisplayName: Code Free
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: CodeFree/CodeFree.entitlements
+        # Sandbox off v0 (design locked)
+        ENABLE_APP_SANDBOX: NO
+        SWIFT_STRICT_CONCURRENCY: complete
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets:
+        - CodeFreeTests
+      environmentVariables:
+        CODE_FREE_REPO_ROOT: $(PROJECT_DIR)/../..
+  CodeFreeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: CodeFreeTests
+    dependencies:
+      - target: CodeFree
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ben-kaye.code-free.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Code Free.app/Contents/MacOS/Code Free"
+        BUNDLE_LOADER: "$(TEST_HOST)"

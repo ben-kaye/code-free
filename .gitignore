@@ -15,3 +15,15 @@ coverage/
 tmp/
 .temp/
 data/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+apps/macos/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
