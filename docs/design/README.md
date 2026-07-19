@@ -13,9 +13,10 @@ Design docs are product contracts, not implementation trackers. PR plans live un
 | 7 | [open](./07-open-questions.md) |
 
 ```
-SwiftUI.app (platform shell) → Node orch → adapter → harness
+Native platform shell  →  Node orch  →  adapter  →  harness
+ (SwiftUI macOS v0)        (shared)     (I/O map)
 ```
 
-Platform-specific behavior stays in the shell; orch/adapters speak protocol only. Seams: [stack](./02-tech-stack.md) · [wiring](./03-wiring.md).
+**Per-platform GUI:** each OS gets a shell in its native UI framework. Platform-specific behavior stays in the shell; orch/adapters speak protocol only. Seams: [stack](./02-tech-stack.md) · [wiring](./03-wiring.md) · [gui](./05-gui-rendering.md).
 
 **Production-ready from day one** — narrow scope, durable design (no throwaway IPC/store/protocol). Bar: [vision](./01-vision.md).

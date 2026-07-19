@@ -2,14 +2,16 @@
 
 | | Choice |
 |--|--------|
-| OS | macOS 14+ only (GUI) |
-| GUI | SwiftUI `.app` — platform shell |
+| GUI model | **One native shell per OS** — platform UI framework, not Electron/Tauri/webview product |
+| OS (v0 ship) | macOS 14+ only |
+| GUI (v0 ship) | SwiftUI `.app` — first platform shell |
+| Later shells | Same host contract + protocol; framework of the target OS (e.g. WinUI, GTK/Qt) — not a shared GUI abstraction layer |
 | Orch | Node 24+ (LTS), TS — platform-agnostic runtime |
 | IPC | localhost WS + token (UDS later) |
 | Store | SQLite in orch |
 | Artifacts | filesystem under data root |
-| Protocol | `packages/protocol` (zod) → JSON Schema; Swift Codable hand-rolled v0 |
-| Ship | `.app` + Node sidecar |
+| Protocol | `packages/protocol` (zod) → JSON Schema; shell codecs hand-rolled v0 (Swift Codable first) |
+| Ship (v0) | `.app` + Node sidecar |
 
 ## Production defaults
 
@@ -35,17 +37,17 @@ Prefer well-maintained libraries; invent only product logic (sessions, adapter m
 |---------|--------|-------------------|
 | Schema / validation | zod → JSON Schema export | Hand-rolled parsers, dual ad-hoc types |
 | WS server (Node) | `ws` (or equivalent mainstream) | Custom TCP framing |
-| WS client (Swift) | `URLSessionWebSocketTask` | Custom socket stack |
+| WS client (shell) | Platform native client (e.g. Swift `URLSessionWebSocketTask`) | Custom socket stack |
 | SQLite | better-sqlite3 or drizzle/kysely over it | Homegrown file log as primary store |
 | Process / spawn | Node `child_process` (+ thin wrapper only if needed) | Custom process supervisor frameworks |
 | CLI flags | something like `util.parseArgs` / commander / cac | DIY argv |
 | Tests / fixtures | vitest (or project standard) + recorded jsonl | One-off harness mocks with no replay |
-| Swift UI / async | SwiftUI, Foundation, structured concurrency | Extra GUI frameworks for shell |
+| Shell UI / async (macOS) | SwiftUI, Foundation, structured concurrency | Extra GUI frameworks, webview product shell |
 
 **Own:** event semantics, adapter boundary, policy, Outputs UX, harness mapping.  
 **Borrow:** bytes on the wire, SQL, schema tooling, process I/O primitives.
 
-v0 exception: Swift Codable hand-rolled from the shared schema (codegen if drift hurts) — still schema-driven, not a second invented protocol.
+v0 exception: Swift Codable hand-rolled from the shared schema (codegen if drift hurts) — still schema-driven, not a second invented protocol. Other shells follow the same rule in their language.
 
 ## Seams
 
@@ -57,21 +59,22 @@ Platform weight lives in the frontend. Three contracts only:
 | Orch ↔ adapter | `start/send/cancel/approve` + caps + `EventSink`. No UI. |
 | Adapter ↔ harness | CLI-specific I/O; lossy tiers OK; never required on the wire. |
 
-**Shell owns:** glass, windowing, menus, sidecar launch/kill, default paths, Finder/Quick Look/notifications, Keychain if any.
+**Shell owns:** UI, windowing, menus, sidecar launch/kill, default **platform** paths, native open/reveal/notifications/Keychain if any.
 
 **Orch owns:** sessions, policy, event log, artifacts on disk, adapter host.
 
-**Do not:** abstract a multi-OS GUI in v0; hardcode `~/Library/...` inside orch; put OS features in agent caps.
+**Do not:** ship a cross-platform GUI abstraction as the product; hardcode `~/Library/...` inside orch; put OS features in agent caps; implement the shell as a thin webview over orch.
 
 ## Layout
 
 ```
-apps/macos/           # Xcode SwiftUI (platform shell)
+apps/macos/           # SwiftUI platform shell (v0)
 apps/orchestrator/    # Node (no Cocoa, no windowing)
 packages/protocol/
 packages/adapters-*
 packages/store/
 fixtures/adapters/
+# later: apps/<os>/ for additional native shells
 ```
 
 ## Data root
@@ -82,7 +85,7 @@ Shell chooses and passes `--data-root` (and bind/token paths). Orch never assume
 
 ## Rejected (primary)
 
-Tauri/Electron shell · pure-Swift adapters v0 · MAS-first sandbox · platform plugins inside Node for Mac-only UI · custom IPC framing / homegrown DB when a mainstream lib fits
+Tauri/Electron / webview-as-product shell · pure-Swift adapters v0 · MAS-first sandbox · platform plugins inside Node for OS-only UI · custom IPC framing / homegrown DB when a mainstream lib fits · one shared multi-OS GUI toolkit instead of native shells
 
 ## Locked (see [07](./07-open-questions.md))
 

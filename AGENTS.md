@@ -1,6 +1,6 @@
 # AGENTS.md
 
-macOS SwiftUI shell + harness-agnostic Node orchestrator. Shell owns glass + platform/host; adapters own harness I/O; event log is truth. Prefer mature libs for infra; own product semantics. Production-ready from day one: thin scope, no prototype seams.
+Native per-platform GUI (v0: macOS SwiftUI) + harness-agnostic Node orchestrator. Shell owns UI + platform/host; adapters own harness I/O; event log is truth. Prefer mature libs for infra; own product semantics. Production-ready from day one: thin scope, no prototype seams.
 
 ## Document discipline
 
@@ -38,7 +38,7 @@ Clarity means the reader can see *what must hold* and *which seam owns it* — n
 
 1. **Boundaries validate; interior trusts typed data** — zod/Codable at wire edges; no re-parsing ad hoc JSON deep inside.
 2. **Failures surface** — harness/WS/store faults become events, hard errors, or UI — never silent catch / empty fallback.
-3. **One module, one seam** — shell owns platform paths/host; orch owns sessions/log; adapters own harness I/O. No shell path logic in orch; no harness imports in the app.
+3. **One module, one seam** — shell owns native UI + platform paths/host; orch owns sessions/log; adapters own harness I/O. No shell path logic in orch; no harness imports in the app.
 4. **No temporary seams on the critical path** — durable log, loopback+token, validated protocol. No “dev bind / rewrite later” for the same job.
 5. **Honest caps** — missing ability is off or labeled; never fake Approve or parity UX.
 6. **Names match design vocabulary** — `EventSink`, `afterSeq`, data root, caps, harness id — not parallel jargon for the same concept.

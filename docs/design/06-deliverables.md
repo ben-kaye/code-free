@@ -1,6 +1,6 @@
 # Deliverables
 
-**North star:** macOS app → chat harness → Outputs + timing → reopen history → second harness same shell.
+**North star:** native platform shell (v0: macOS SwiftUI) → chat harness → Outputs + timing → reopen history → second harness same shell.
 
 **Quality bar:** every phase exit includes production-ready behavior for what it ships (durable log, auth’d IPC, validated protocol, tests/fixtures, recoverable failures). No “prototype then replace” on core seams. See [vision](./01-vision.md) production bar.
 

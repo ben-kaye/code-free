@@ -6,7 +6,7 @@
 
 - Multi-doc design
 - GUI → orch → adapter → harness
-- SwiftUI macOS + Node orch + SQLite + WS
+- **Native shell per platform** (platform UI framework; not Electron/webview product); **v0 ship = SwiftUI macOS** + Node orch + SQLite + WS
 - Protocol v1 event log
 - Platform in shell; orch OS-UI-agnostic; data root/bind/token passed by host
 - Paths opaque on wire; caps = agent surface only

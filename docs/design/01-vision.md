@@ -1,13 +1,14 @@
 # Vision
 
-**What:** Codex-class macOS shell; pluggable harnesses; we own rendering.
+**What:** Codex-class **native** desktop shell per platform; pluggable harnesses; we own rendering.
 
-**Why:** GUIs fused to one agent. Want one glass, many workers, intercept I/O.
+**Why:** GUIs fused to one agent *and* to one cross-platform toolkit. Want one **native shell per OS**, many workers, intercept I/O.
 
 ## Goals
 
 - Harness-agnostic sessions
 - GUI detached (never spawns harness)
+- **Per-platform shell** using that OS’s native UI framework (not a shared web/Electron UI)
 - Semantic event stream + custom artifact viewers
 - Replayable sessions (SQLite)
 - Unified approvals/policy
@@ -18,7 +19,8 @@ Narrow **scope**, not quality. Ship less surface; every shipped path is producti
 
 - Build our own agent
 - MAS / hard sandbox
-- Non-macOS GUI
+- **Ship** non-macOS shells (architecture allows later native shells; v0 is macOS only)
+- Shared cross-platform GUI toolkit / webview-as-product shell
 - Cloud sync, multi-user, marketplace, scheduled jobs
 
 ## Principles
@@ -29,8 +31,9 @@ Narrow **scope**, not quality. Ship less surface; every shipped path is producti
 4. Semantic + optional raw streams
 5. Second adapter validates abstraction
 6. Artifacts first-class (Outputs)
-7. Platform-specific behavior lives in the shell; runtime is OS-UI-agnostic
+7. **Platform-specific behavior lives in the shell** (native chrome, paths, host lifecycle); runtime is OS-UI-agnostic
 8. Prefer mature external libs over bespoke infra (transport, schema, store, process)
+9. **Native per platform** — each OS gets its own shell in the platform’s primary UI framework; orch/protocol stay shared; no lowest-common-denominator UI toolkit
 
 ### Production bar
 
@@ -51,4 +54,4 @@ Every design and implementation that ships must satisfy:
 
 ## Done when
 
-Chat via harness A → Outputs + timing → reopen app, history lives → same shell, harness B — and the path above meets the production bar.
+Chat via harness A → Outputs + timing → reopen app, history lives → same **platform** shell, harness B — and the path above meets the production bar.

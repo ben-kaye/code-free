@@ -1,11 +1,15 @@
 # GUI
 
-SwiftUI. Codex IA, not pixel clone. **Platform shell:** glass + native OS + sidecar host; not a thin webview over orch.
+**Native per platform.** Each OS ships its own shell in that platform’s primary UI framework. v0 shell is **SwiftUI on macOS**. Codex IA, not pixel clone.
+
+**Platform shell:** native UI + OS integration + sidecar host — not a thin webview over orch, not a cross-platform toolkit skin.
 
 ```
 NavSplit: Projects/Recents | Transcript | Outputs+Sources inspectors
 Composer: attach · approve policy · harness · model · send · handoff (new session seed)
 ```
+
+IA above is product shape; each shell maps it with native controls (NavigationSplitView, etc.).
 
 ## Bindings
 
@@ -21,25 +25,26 @@ Composer: attach · approve policy · harness · model · send · handoff (new s
 
 ## Rules
 
-- No harness TUI in glass
+- No harness TUI in the shell
 - Transcript = reduce(events); live == replay
 - Unknown event → skip/debug
 - No harness SDKs/CLI templates in the app — protocol only
 - Paths from events are opaque; native open/reveal stays here
 - Connection loss, orch restart, and session errors are first-class UI — not console-only
 - Disabled/missing caps look disabled; never pretend a harness can do what it cannot
+- Shell may use platform idioms freely; it must not invent a second wire protocol
 
 ## Viewers
 
-Swift `ArtifactViewer`: match artifact → view. Image default; domain packs via meta/path.
+Platform `ArtifactViewer`: match artifact → view. Image default; domain packs via meta/path. (macOS: Swift type; other shells: same role.)
 
 ## Native
 
-Finder reveal, Quick Look, Settings, menu bar, notifications, (later) Keychain. Sandbox off v0. These are shell reactions to protocol data — not orch commands or adapter caps.
+Platform chrome stays in the shell. On macOS: Finder reveal, Quick Look, Settings, menu bar, notifications, (later) Keychain. Sandbox off v0. These are shell reactions to protocol data — not orch commands or adapter caps. Other OS shells use the equivalent native affordances.
 
 ## Non-goals
 
-Web shell as product · vendor branding · multi-OS GUI abstraction in v0
+Web shell as product · vendor branding · one shared multi-OS GUI abstraction as the product (Electron/Tauri/etc.) · shipping non-macOS shells in v0
 
 ## Reference UI
 

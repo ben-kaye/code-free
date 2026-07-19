@@ -32,7 +32,7 @@ Transport (WS now, UDS later) must not change event types.
 3. One active turn/session v0; multi-session OK
 4. Paths on the wire are opaque strings — shell maps to reveal/open/Quick Look
 5. Caps = agent surface (`streaming_text`, `approvals`, …), not OS features
-6. App knows harness only via `harness.list` (id, name, caps) — no CLI/SDK imports in Swift
+6. App knows harness only via `harness.list` (id, name, caps) — no CLI/SDK imports in the shell
 7. Persist before acking durability-sensitive work; reconnect never requires a fresh empty log
 
 ## Adapter

@@ -1,36 +1,57 @@
 # Code Free
 
-Bring your own harness GUI for the future of coding.
+**Bring-your-own-harness GUI for agentic coding.**
 
-**Display name:** Code Free · **Domain:** code.ben-kaye.com · **Bundle id:** com.ben-kaye.code-free
+Code Free is an MIT-**harness-agnostic** coding client: a **per-platform native shell** (v0: SwiftUI on macOS) talks a validated event protocol to a local Node orchestrator, which drives pluggable adapters (Grok Build first). Sessions and transcripts live in SQLite so history survives restarts.
 
-macOS SwiftUI shell + harness-agnostic Node orchestrator. Design: [docs/design/README.md](./docs/design/README.md).
+MacOS via SwiftUI first. Other platforms to be developed.
 
-## Status
+| | |
+|--|--|
+| **Display name** | Code Free |
+| **Domain** | [code.ben-kaye.com](https://code.ben-kaye.com) |
+| **Bundle id** | `com.ben-kaye.code-free` |
+| **License** | [MIT](./LICENSE) |
+| **Status** | Early development — **Phase 2** (first adapter + orch host); Phase 3 shell speaks protocol only |
 
-**Phase 2** (in progress): Grok Build adapter (`packages/adapter-grok-build`) + orch adapter host. With `grok` on `PATH` (or `CODE_FREE_GROK`), create session → send streams semantic events. Phase 3 shell already speaks protocol only and will pick up harness.list / streamed turns.
+Design contracts: [`docs/design/`](./docs/design/README.md) · Contributing: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+
+## Why this exists
+
+Most agent GUIs are fused to one runtime *and* to one cross-platform toolkit. Code Free separates:
+
+```
+Native platform shell  →  Node orchestrator  →  adapter  →  harness CLI
+ (SwiftUI / macOS v0)       (sessions + log)     (I/O map)    (Grok, …)
+```
+
+- **Shell** — **native** UI for that OS, sidecar lifecycle, platform data paths. Never spawns a harness. Never a thin webview over orch.
+- **Orchestrator** — WebSocket IPC, sessions, durable event log, adapter host (OS-UI-agnostic).
+- **Adapters** — translate one harness’s stream into the shared semantic protocol.
+- **Protocol** — versioned, validated at the boundary (`packages/protocol`).
+
+The event log is the source of truth. Missing harness abilities are **capped or labeled** — never faked.
+
+## Features (current / direction)
+
+| Area | Today | Direction |
+|------|--------|-----------|
+| Chat + stream | Grok Build via ACP when `grok` is available | Second harness (Codex) behind the same shell |
+| History | SQLite under data root; reopen → replay | Outputs, viewers, real approvals |
+| UI shell | SwiftUI macOS | Additional **native** shells per OS (same protocol) |
+| Security (local) | Loopback bind, token on `hello`, token file `0600` | Same bar for packaging / release |
+| Caps | Protocol carries capabilities | UI driven only by caps, not harness id |
+
+Non-goals for v0 (by design): building our own agent, Mac App Store hard sandbox, shipping non-macOS shells yet, Electron/webview product UI, cloud sync, multi-user, marketplace. Architecture still targets **native UI per platform**. See [vision](./docs/design/01-vision.md).
 
 ## Requirements
 
-- Node.js **≥ 24** (see `.nvmrc`)
-- [pnpm](https://pnpm.io) 11+
-- Xcode 15+ (macOS app), [XcodeGen](https://github.com/yonaskolb/XcodeGen) to regenerate the project
+- **Node.js ≥ 24** ([`.nvmrc`](./.nvmrc))
+- **[pnpm](https://pnpm.io) 11+**
+- **macOS 14+**, Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) for the app
+- Optional: **Grok** CLI on `PATH` or `CODE_FREE_GROK` for live adapter streams
 
-## Workspace
-
-```
-apps/macos/                 # SwiftUI shell (Xcode / XcodeGen)
-apps/orchestrator/          # Node sidecar (WS + sessions + adapter host)
-packages/protocol/          # zod wire schema
-packages/adapter-core/      # orch ↔ adapter contract
-packages/adapter-grok-build/# Grok Build ACP adapter
-packages/store/             # SQLite event log
-fixtures/adapters/          # recorded ACP streams for tests
-docs/design/                # product design (contracts)
-docs/plan/                  # implementation PR plans
-```
-
-## Setup
+## Quick start
 
 ```bash
 pnpm install
@@ -38,7 +59,7 @@ pnpm test
 pnpm typecheck
 ```
 
-## Run orchestrator (manual smoke)
+### Orchestrator (manual smoke)
 
 ```bash
 ROOT=$(mktemp -d)
@@ -49,42 +70,50 @@ pnpm --filter @code-free/orchestrator exec tsx src/cli.ts \
   --bind 127.0.0.1:0
 ```
 
-Stdout prints one JSON line with `endpoint` and `tokenFile`. Connect with a WebSocket client:
+Stdout prints one JSON line with `endpoint` and `tokenFile`. With a WebSocket client:
 
 1. Send `{"kind":"hello","protocolVersion":1,"token":"<token file contents>"}`
 2. Expect server `hello`
-3. `session.create` → `session.subscribe` → `session.send` (streams via Grok Build when `grok` is available; otherwise `session.error` with a clear code such as `binary_not_found`)
+3. `session.create` → `session.subscribe` → `session.send`
 
-SIGTERM disposes harness children, flushes, and closes the DB.
+Streams via Grok Build when `grok` is available; otherwise `session.error` with a clear code (e.g. `binary_not_found`). SIGTERM disposes harness children, flushes, and closes the DB.
 
-### Optional: point at a specific Grok binary
+Optional binary override:
 
 ```bash
 export CODE_FREE_GROK=/path/to/grok
 ```
 
-Resolution order: `CODE_FREE_GROK` → `PATH` → `~/.grok/bin/grok` → `~/.local/bin/grok`. The well-known paths cover the macOS app when launched from Xcode/Dock (minimal GUI `PATH`).
+Resolution order: `CODE_FREE_GROK` → `PATH` → `~/.grok/bin/grok` → `~/.local/bin/grok` (GUI apps often have a minimal `PATH`).
 
-## Run macOS app
+### macOS app
 
 ```bash
-# once after clone / project.yml changes
 cd apps/macos && xcodegen generate
-
-# open in Xcode (scheme sets CODE_FREE_REPO_ROOT for orch discovery)
 open CodeFree.xcodeproj
-
-# or CLI build
-xcodebuild -scheme CodeFree -project CodeFree.xcodeproj -configuration Debug -destination 'platform=macOS' build
+# or: xcodebuild -scheme CodeFree -project CodeFree.xcodeproj \
+#        -configuration Debug -destination 'platform=macOS' build
 ```
 
-The shell launches the Node orchestrator as a sidecar (`~/Library/Application Support/code-free/`). Dev resolution order for the orch binary:
+The scheme sets `CODE_FREE_REPO_ROOT` for monorepo orch discovery. Data and token live under `~/Library/Application Support/code-free/`.
 
-1. `CODE_FREE_ORCH` (absolute path or shell command)
-2. `CODE_FREE_REPO_ROOT` / discovered monorepo (`apps/orchestrator`)
-3. `code-free-orch` on `PATH`
+Orchestrator resolution: `CODE_FREE_ORCH` → monorepo `apps/orchestrator` → `code-free-orch` on `PATH`.
 
-With Grok installed and authenticated, **home composer (or New task) → send** streams assistant deltas (and tools when the harness uses them). Without a binary, send still records the user message and surfaces a clear `session.error` (no hang). Quit idle → SIGTERM sidecar (disposes children); reopen → sessions and transcript replay from SQLite.
+With Grok installed and authenticated, home composer (or New task) → send streams assistant deltas (and tools when the harness uses them). Without a binary, the user message is still recorded and a clear `session.error` surfaces — no hang. Quit idle → SIGTERM sidecar; reopen → sessions and transcript replay from SQLite.
+
+## Repository layout
+
+```
+apps/macos/                  # Native SwiftUI shell (v0 platform GUI)
+apps/orchestrator/           # Node sidecar (WS + sessions + adapter host)
+packages/protocol/           # zod wire schema (shared source of truth)
+packages/adapter-core/       # orch ↔ adapter contract
+packages/adapter-grok-build/ # Grok Build ACP adapter
+packages/store/              # SQLite event log
+fixtures/adapters/           # recorded ACP streams for tests
+docs/design/                 # product contracts (durable)
+docs/plan/                   # implementation PR plans (disposable)
+```
 
 ## Production defaults (v0)
 
@@ -92,9 +121,37 @@ With Grok installed and authenticated, **home composer (or New task) → send** 
 |------|----------|
 | Bind | Loopback only (`127.0.0.1` / `::1`) |
 | Auth | Token required on `hello`; token file mode `0600` |
-| Store | SQLite under `--data-root`; seq after durable append |
+| Store | SQLite under `--data-root`; `seq` only after durable append |
 | Protocol | Validated at boundary; unknown **commands** rejected |
+| Failures | Surface as events, hard errors, or UI — never silent |
+
+Full bar: [vision → Production bar](./docs/design/01-vision.md).
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/design/](./docs/design/README.md) | Product intent, seams, protocol, UX rules, phase exit criteria |
+| [docs/plan/](./docs/plan/README.md) | PR plans and phase progress |
+| [AGENTS.md](./AGENTS.md) | Seams, clarity rubrics, design vs plan discipline |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Setup, PR expectations, good first areas |
+| [fixtures/](./fixtures/README.md) | Adapter stream fixtures |
+
+## Contributing
+
+Contributions are welcome under the MIT license.
+
+- **Bugs and small fixes** — open an issue or PR; include repro steps and redacted logs.
+- **Protocol / architecture** — propose the contract change in an issue or design doc update first.
+- **New harness adapters** — implement against `packages/adapter-core` + protocol; do not wire harness SDKs into any platform shell.
+- **New OS shells** — native UI framework for that platform + same host contract; design lock first (not Electron/webview by default).
+
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the production bar, and PR guidelines.
+
+## Security
+
+IPC is intentionally **local-only** (loopback + token). Report security issues privately to the repository owner rather than filing a public exploit write-up. Do not commit tokens or paste them into issues.
 
 ## License
 
-Private / TBD.
+[MIT](./LICENSE) © 2026 Ben Kaye
