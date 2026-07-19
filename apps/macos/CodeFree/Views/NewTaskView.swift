@@ -7,6 +7,8 @@ struct NewTaskHomeView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var workspaces: WorkspaceStore
     @FocusState private var focused: Bool
+    /// Brief pulse when the user tries to start without a workspace.
+    @State private var highlightWorkspace = false
 
     var body: some View {
         Group {
@@ -21,25 +23,28 @@ struct NewTaskHomeView: View {
 
     private var homePane: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 48)
-                .frame(maxHeight: 120)
+            Spacer(minLength: 24)
 
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 greeting
                 homeComposer
-                    .frame(maxWidth: 680)
+                    .frame(maxWidth: 560)
                 selectors
-                Text("⌘↩ to start · Return for newline")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                statusLine
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 40)
+            .padding(.bottom, 24)
 
-            Spacer(minLength: 48)
+            Spacer(minLength: 24)
         }
         .onAppear {
             workspaces.ensureSelection()
             if isReady { focused = true }
+        }
+        .onChange(of: model.phase) { _, phase in
+            if case .ready = phase {
+                focused = true
+            }
         }
     }
 
@@ -49,33 +54,33 @@ struct NewTaskHomeView: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
-            Text("Orchestrator unavailable")
+            Text("Local orchestrator unavailable")
                 .font(.title2.weight(.semibold))
-            Text(message.isEmpty ? "Could not connect to the local orchestrator." : message)
+            Text(message.isEmpty ? "Could not start or reach the local orchestrator." : message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
-            Button("Restart") {
+            Button("Restart orchestrator") {
+                InteractionFeedback.click()
                 model.restart()
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(SoftProminentButtonStyle())
             .keyboardShortcut("r", modifiers: [.command])
-            .accessibilityLabel("Restart orchestrator")
+            .accessibilityLabel("Restart local orchestrator")
         }
         .padding(32)
         .accessibilityElement(children: .combine)
     }
 
     private var greeting: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.15))
-                    .frame(width: 48, height: 48)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .frame(width: 40, height: 40)
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
             }
             .accessibilityHidden(true)
@@ -87,11 +92,16 @@ struct NewTaskHomeView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .animation(.easeOut(duration: 0.2), value: subtitle)
             }
         }
+        .padding(.bottom, 4)
     }
 
     private var subtitle: String? {
+        if model.isSending {
+            return "Starting task…"
+        }
         if let name = workspaces.selected?.displayName {
             return "Start a task in \(name)"
         }
@@ -112,19 +122,53 @@ struct NewTaskHomeView: View {
             canSend: canSend,
             isSending: model.isSending,
             focused: $focused,
-            onSend: { model.startTaskFromHome() }
+            onSend: startFromHome
         )
-        .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
-        .opacity(isReady ? 1 : 0.7)
+        .opacity(isReady ? 1 : 0.72)
+        .allowsHitTesting(isReady && !model.isSending)
     }
 
     private var selectors: some View {
-        HStack(spacing: 10) {
-            WorkspaceSelectorMenu()
+        HStack(spacing: 8) {
+            WorkspaceSelectorMenu(emphasized: needsWorkspace || highlightWorkspace)
             HarnessSelectorMenu()
-            // Honest local-only badge — not a fake multi-environment menu.
+            // Honest local-only label — not a menu-looking chip.
             LocalEnvironmentBadge()
         }
+        .padding(.top, 2)
+        .opacity(model.isSending ? 0.55 : 1)
+        .allowsHitTesting(!model.isSending)
+        .animation(.easeOut(duration: 0.18), value: model.isSending)
+        .animation(.easeOut(duration: 0.2), value: highlightWorkspace)
+    }
+
+    private var statusLine: some View {
+        Group {
+            if model.isSending {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Creating task and sending first message…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                Text(hintCopy)
+                    .font(.caption)
+                    .foregroundStyle(.secondary.opacity(0.85))
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: model.isSending)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var hintCopy: String {
+        if needsWorkspace {
+            return "Choose a folder to enable start · ⌘↩ when ready"
+        }
+        return "⌘↩ to start · Return for newline"
     }
 
     private var isReady: Bool {
@@ -132,10 +176,49 @@ struct NewTaskHomeView: View {
         return false
     }
 
+    private var needsWorkspace: Bool {
+        workspaces.selected == nil
+    }
+
+    private var hasDraft: Bool {
+        !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Draft is ready — missing workspace still enables send so the click can open the folder picker.
     private var canSend: Bool {
         guard isReady else { return false }
         guard !model.isSending else { return false }
-        return !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasDraft
+    }
+
+    private func startFromHome() {
+        guard isReady, !model.isSending else { return }
+        guard hasDraft else { return }
+
+        if needsWorkspace {
+            // Pulse the folder chip, then open the picker — never a silent no-op.
+            withAnimation(.easeInOut(duration: 0.15)) {
+                highlightWorkspace = true
+            }
+            InteractionFeedback.click()
+            if workspaces.pickAndAdd() != nil {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    highlightWorkspace = false
+                }
+                InteractionFeedback.click()
+                model.startTaskFromHome()
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        highlightWorkspace = false
+                    }
+                }
+            }
+            return
+        }
+
+        InteractionFeedback.click()
+        model.startTaskFromHome()
     }
 }
 
@@ -146,15 +229,17 @@ struct SelectorChipLabel: View {
     let title: String
     var detail: String? = nil
     var showsChevron: Bool = true
+    /// Stronger border when the chip needs attention (e.g. missing workspace).
+    var emphasized: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: systemImage)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(emphasized ? Color.accentColor : Color.secondary)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.callout.weight(.medium))
+                .font(.callout)
                 .lineLimit(1)
             if let detail, !detail.isEmpty, detail != title {
                 Text(detail)
@@ -169,12 +254,24 @@ struct SelectorChipLabel: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.05), in: Capsule())
-        .overlay(
-            Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(
+                    emphasized
+                        ? Color.accentColor.opacity(0.12)
+                        : Color.primary.opacity(0.06)
+                )
         )
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    emphasized ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.06),
+                    lineWidth: emphasized ? 1.25 : 1
+                )
+        )
+        .animation(.easeInOut(duration: 0.18), value: emphasized)
     }
 }
 
@@ -183,6 +280,7 @@ struct SelectorChipLabel: View {
 struct WorkspaceSelectorMenu: View {
     @EnvironmentObject private var workspaces: WorkspaceStore
     @State private var confirmClose = false
+    var emphasized: Bool = false
 
     var body: some View {
         Menu {
@@ -220,10 +318,12 @@ struct WorkspaceSelectorMenu: View {
             SelectorChipLabel(
                 systemImage: "folder.fill",
                 title: workspaces.selected?.displayName ?? "Choose folder",
-                detail: workspaces.selected?.shortPath
+                detail: workspaces.selected?.shortPath,
+                emphasized: emphasized || workspaces.selected == nil
             )
         }
         .menuStyle(.borderlessButton)
+        .buttonStyle(ChipButtonStyle(emphasized: emphasized || workspaces.selected == nil))
         .fixedSize()
         .help(workspaces.selected?.path ?? "Select a workspace folder for this task")
         .accessibilityLabel(
@@ -247,10 +347,12 @@ struct WorkspaceSelectorMenu: View {
     }
 }
 
-// MARK: - Harness selector
+// MARK: - Harness + model selector
 
+/// Popover: harness chips + model × thinking-level matrix (rows = models, columns = effort).
 struct HarnessSelectorMenu: View {
     @EnvironmentObject private var model: AppModel
+    @State private var isPresented = false
 
     var body: some View {
         if model.harnesses.isEmpty {
@@ -262,49 +364,338 @@ struct HarnessSelectorMenu: View {
             .help("No harness adapter configured yet")
             .accessibilityLabel("No harness adapter configured")
         } else {
-            Menu {
-                ForEach(model.harnesses) { harness in
-                    Button {
-                        model.selectHarness(harness.id)
-                    } label: {
-                        HStack {
-                            Text(harness.name)
-                            if harness.id == model.selectedHarnessId {
-                                Image(systemName: "checkmark")
+            Button {
+                isPresented.toggle()
+            } label: {
+                SelectorChipLabel(
+                    systemImage: "cpu",
+                    title: model.harnessModelChipTitle,
+                    detail: model.selectedModel == nil ? nil : model.selectedHarness?.name
+                )
+            }
+            .buttonStyle(ChipButtonStyle())
+            .fixedSize()
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                HarnessModelPickerPopover(isPresented: $isPresented)
+                    .environmentObject(model)
+            }
+            .help(helpText)
+            .accessibilityLabel(accessibilityText)
+        }
+    }
+
+    private var helpText: String {
+        var parts: [String] = []
+        if let h = model.selectedHarness {
+            parts.append("Harness: \(h.name)")
+        }
+        if let m = model.selectedModel {
+            parts.append("Model: \(m.selectionLabel(effortId: model.selectedReasoningEffortId))")
+        }
+        return parts.isEmpty ? "Choose harness and model" : parts.joined(separator: " · ")
+    }
+
+    private var accessibilityText: String {
+        helpText
+    }
+}
+
+struct HarnessModelPickerPopover: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            harnessSection
+            if model.selectedHarness?.supportsModelsList == true {
+                Divider()
+                modelMatrixSection
+            } else if model.selectedHarness != nil {
+                Text("This harness does not expose a model list.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(minWidth: matrixMinWidth, maxWidth: 420)
+        // Re-query orch on open and when the harness chip changes — no sticky shell cache.
+        .task(id: model.selectedHarnessId) {
+            await model.refreshModelsCatalogAsync()
+        }
+    }
+
+    private var matrixMinWidth: CGFloat {
+        let cols = max(unionEffortColumns.count, 1)
+        return min(420, max(260, 140 + CGFloat(cols) * 56))
+    }
+
+    // MARK: Harness
+
+    private var harnessSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Harness")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            if model.harnesses.count == 1, let only = model.harnesses.first {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                    Text(only.name)
+                        .font(.callout.weight(.medium))
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Harness \(only.name)")
+            } else {
+                HStack(spacing: 6) {
+                    ForEach(model.harnesses) { harness in
+                        harnessChip(harness)
+                    }
+                }
+            }
+        }
+    }
+
+    private func harnessChip(_ harness: HarnessInfo) -> some View {
+        let selected = harness.id == model.selectedHarnessId
+        return Button {
+            InteractionFeedback.click()
+            model.selectHarness(harness.id)
+        } label: {
+            Text(harness.name)
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05),
+                    in: Capsule()
+                )
+                .overlay(
+                    Capsule().strokeBorder(
+                        selected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08),
+                        lineWidth: 1
+                    )
+                )
+        }
+        .buttonStyle(SelectableCellButtonStyle(isSelected: selected))
+        .accessibilityLabel("Harness \(harness.name)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: Model matrix
+
+    /// Union of effort ids across listed models (stable order: first-seen, prefer low→high when known).
+    private var unionEffortColumns: [ReasoningEffortInfo] {
+        var seen = Set<String>()
+        var cols: [ReasoningEffortInfo] = []
+        for m in model.models {
+            for e in m.efforts where !seen.contains(e.id) {
+                seen.insert(e.id)
+                cols.append(e)
+            }
+        }
+        return Self.orderedEfforts(cols)
+    }
+
+    private var modelMatrixSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Model")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                if model.isLoadingModels, !model.models.isEmpty {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityLabel("Refreshing models")
+                }
+            }
+
+            if model.isLoadingModels && model.models.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading models…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Loading models")
+            } else if model.models.isEmpty {
+                Text("No models available")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if unionEffortColumns.isEmpty {
+                // No thinking axis — simple model list
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.models) { m in
+                        simpleModelRow(m)
+                    }
+                }
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
+                    GridRow {
+                        Text("")
+                            .frame(minWidth: 100, alignment: .leading)
+                        ForEach(unionEffortColumns) { effort in
+                            Text(effort.displayLabel)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(minWidth: 48, maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    ForEach(model.models) { m in
+                        GridRow {
+                            Text(m.displayName)
+                                .font(.callout.weight(.medium))
+                                .lineLimit(1)
+                                .frame(minWidth: 100, alignment: .leading)
+                                .help(m.id)
+                            if m.supportsReasoning {
+                                ForEach(unionEffortColumns) { effort in
+                                    effortCell(model: m, effort: effort)
+                                }
+                            } else {
+                                // Model without efforts: single select spanning first column, rest disabled.
+                                modelOnlyCell(m)
+                                ForEach(Array(unionEffortColumns.dropFirst())) { _ in
+                                    Color.clear.frame(width: 28, height: 28)
+                                }
                             }
                         }
                     }
                 }
-            } label: {
-                SelectorChipLabel(
-                    systemImage: "cpu",
-                    title: model.selectedHarness?.name ?? "Choose harness"
-                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Model and thinking level")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help(
-                model.selectedHarness.map { "Harness: \($0.name) (\($0.id))" }
-                    ?? "Choose a harness adapter"
-            )
-            .accessibilityLabel(
-                model.selectedHarness.map { "Harness \($0.name)" } ?? "Choose harness"
-            )
         }
+    }
+
+    private func simpleModelRow(_ m: ModelInfo) -> some View {
+        let selected = m.id == model.selectedModelId
+        return Button {
+            InteractionFeedback.click()
+            model.selectModel(m.id, effortId: nil)
+            isPresented = false
+        } label: {
+            HStack {
+                Text(m.displayName)
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                selected ? Color.accentColor.opacity(0.14) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(SelectableCellButtonStyle(isSelected: selected))
+        .accessibilityLabel("Model \(m.displayName)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func effortCell(model m: ModelInfo, effort: ReasoningEffortInfo) -> some View {
+        let available = m.efforts.contains(where: { $0.id == effort.id })
+        let selected =
+            available
+            && m.id == model.selectedModelId
+            && model.selectedReasoningEffortId == effort.id
+        return Button {
+            guard available else { return }
+            InteractionFeedback.click()
+            model.selectModel(m.id, effortId: effort.id)
+            isPresented = false
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.accentColor : Color.primary.opacity(available ? 0.06 : 0.02))
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                } else if available {
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1.5)
+                        .frame(width: 12, height: 12)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SelectableCellButtonStyle(isSelected: selected))
+        .disabled(!available)
+        .help(available ? "\(m.displayName) · \(effort.displayLabel)" : "Not available for \(m.displayName)")
+        .accessibilityLabel("\(m.displayName), \(effort.displayLabel)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(available ? "Select model and thinking level" : "Unavailable")
+    }
+
+    private func modelOnlyCell(_ m: ModelInfo) -> some View {
+        let selected = m.id == model.selectedModelId
+        return Button {
+            InteractionFeedback.click()
+            model.selectModel(m.id, effortId: nil)
+            isPresented = false
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.accentColor : Color.primary.opacity(0.06))
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                } else {
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1.5)
+                        .frame(width: 12, height: 12)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SelectableCellButtonStyle(isSelected: selected))
+        .help(m.displayName)
+        .accessibilityLabel("Model \(m.displayName)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// Prefer low → medium → high when those ids appear; keep other efforts after, first-seen order.
+    private static func orderedEfforts(_ cols: [ReasoningEffortInfo]) -> [ReasoningEffortInfo] {
+        let rank: [String: Int] = ["low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4]
+        return cols.enumerated().sorted { a, b in
+            let ra = rank[a.element.id.lowercased()] ?? (100 + a.offset)
+            let rb = rank[b.element.id.lowercased()] ?? (100 + b.offset)
+            return ra < rb
+        }.map(\.element)
     }
 }
 
-// MARK: - Local environment (badge, not a fake menu)
+// MARK: - Local environment (plain label — not a disabled-looking menu)
 
 struct LocalEnvironmentBadge: View {
     var body: some View {
-        SelectorChipLabel(
-            systemImage: "desktopcomputer",
-            title: "Local",
-            showsChevron: false
-        )
+        HStack(spacing: 4) {
+            Image(systemName: "desktopcomputer")
+                .font(.caption)
+                .accessibilityHidden(true)
+            Text("This Mac")
+                .font(.caption)
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 4)
         .help("Tasks run on this Mac. Remote environments are not available yet.")
-        .accessibilityLabel("Environment: Local")
+        .accessibilityLabel("Environment: This Mac")
     }
 }
 

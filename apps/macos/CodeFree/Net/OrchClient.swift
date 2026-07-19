@@ -154,6 +154,18 @@ actor OrchClient {
         return try arr.map { try decodeValue(HarnessInfo.self, from: $0) }
     }
 
+    func listModels(harnessId: String? = nil) async throws -> [ModelInfo] {
+        let result = try await request(
+            ModelsListCommand(requestId: newId(), harnessId: harnessId)
+        )
+        guard let data = result.data?.objectValue,
+              case .array(let arr) = data["models"]
+        else {
+            return []
+        }
+        return try arr.map { try decodeValue(ModelInfo.self, from: $0) }
+    }
+
     func subscribe(sessionId: String, afterSeq: Int = 0) async throws {
         _ = try await request(
             SessionSubscribeCommand(

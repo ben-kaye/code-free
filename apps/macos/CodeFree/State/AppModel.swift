@@ -12,7 +12,8 @@ final class AppModel: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
-    @Published private(set) var connectionLabel: String = "Disconnected"
+    /// Human status for the local orchestrator. Only shown while not ready.
+    @Published private(set) var connectionLabel: String = "Orchestrator offline"
     @Published private(set) var sessions: [SessionSummary] = []
     /// Soft-deleted tasks; orch purges after 7 days.
     @Published private(set) var archivedSessions: [SessionSummary] = []
@@ -30,6 +31,16 @@ final class AppModel: ObservableObject {
     /// Selected harness for new tasks. Nil when none available or user cleared.
     @Published var selectedHarnessId: String?
 
+    /// From `models.list` for the selected harness. Empty when cap off or none registered.
+    /// Refetched when the picker opens, harness changes, and before starting a task — not a sticky snapshot.
+    @Published private(set) var models: [ModelInfo] = []
+    /// True while a `models.list` request is in flight for the selected harness.
+    @Published private(set) var isLoadingModels: Bool = false
+    /// Selected model id for new tasks (matrix row).
+    @Published var selectedModelId: String?
+    /// Selected thinking / reasoning effort id (matrix column). Nil when model has none.
+    @Published var selectedReasoningEffortId: String?
+
     /// Shell-owned project bookmarks (cwd defaults). Orch only stores session cwd.
     let workspaces = WorkspaceStore()
 
@@ -40,6 +51,8 @@ final class AppModel: ObservableObject {
     private var startTask: Task<Void, Never>?
     /// Bumped on navigation so in-flight `startTaskFromHome` can bail after each await.
     private var taskOpGeneration: UInt64 = 0
+    /// Bumped when the selected harness changes or a new models fetch starts; drops stale replies.
+    private var modelsFetchGeneration: UInt64 = 0
 
     var selectedSession: SessionSummary? {
         sessions.first { $0.id == selectedSessionId }
@@ -51,16 +64,79 @@ final class AppModel: ObservableObject {
         return harnesses.first { $0.id == selectedHarnessId }
     }
 
+    var selectedModel: ModelInfo? {
+        guard let selectedModelId else { return nil }
+        return models.first { $0.id == selectedModelId }
+    }
+
+    /// Label for the harness/model chip on the home orchestrator.
+    var harnessModelChipTitle: String {
+        if let model = selectedModel {
+            return model.selectionLabel(effortId: selectedReasoningEffortId)
+        }
+        if let harness = selectedHarness {
+            return harness.name
+        }
+        return "Choose harness"
+    }
+
+    /// Durable `session.model` value for create (id or id#effort).
+    var selectedModelRef: String? {
+        guard let selectedModelId else { return nil }
+        let effort = selectedModel?.supportsReasoning == true ? selectedReasoningEffortId : nil
+        return ModelRef.encode(modelId: selectedModelId, effortId: effort)
+    }
+
     func selectHarness(_ id: String?) {
         if let id {
             guard harnesses.contains(where: { $0.id == id }) else { return }
+            if selectedHarnessId == id {
+                // Same harness — still refresh so offerings can change while the picker is open.
+                Task { await refreshModels() }
+                return
+            }
             selectedHarnessId = id
+            // Clear catalog for the previous harness; fetch is race-guarded by generation.
+            models = []
+            selectedModelId = nil
+            selectedReasoningEffortId = nil
+            Task { await refreshModels() }
         } else {
+            modelsFetchGeneration &+= 1
             selectedHarnessId = nil
+            models = []
+            selectedModelId = nil
+            selectedReasoningEffortId = nil
+            isLoadingModels = false
         }
     }
 
-    /// Sessions grouped by normalized workspace path (Projects section).
+    func selectModel(_ modelId: String, effortId: String?) {
+        guard models.contains(where: { $0.id == modelId }) else { return }
+        selectedModelId = modelId
+        if let model = models.first(where: { $0.id == modelId }), model.supportsReasoning {
+            if let effortId, model.efforts.contains(where: { $0.id == effortId }) {
+                selectedReasoningEffortId = effortId
+            } else {
+                selectedReasoningEffortId = model.preferredEffortId
+            }
+        } else {
+            selectedReasoningEffortId = nil
+        }
+    }
+
+    /// Re-fetch the model catalog for the current harness (picker open / harness change / pre-create).
+    func refreshModelsCatalog() {
+        Task { await refreshModels() }
+    }
+
+    /// Awaitable catalog refresh for SwiftUI `.task` and pre-create paths.
+    func refreshModelsCatalogAsync() async {
+        await refreshModels()
+    }
+
+    /// Active projects for the sidebar: every non-closed bookmark, plus session-only paths.
+    /// Bookmarks always appear (empty task lists included) so New project shows immediately.
     var sessionsByWorkspacePath: [(path: String, sessions: [SessionSummary])] {
         var order: [String] = []
         var buckets: [String: [SessionSummary]] = [:]
@@ -70,19 +146,16 @@ final class AppModel: ObservableObject {
                 order.append(key)
                 buckets[key] = []
             }
-            buckets[key]?.append(session)
+            buckets[key, default: []].append(session)
         }
-        // Prefer bookmarked workspace order, then remaining by recency of first session.
-        // Closed projects stay out of this list (sessions remain under Recents).
+        // Closed projects stay out (sessions remain under Recents).
         var result: [(path: String, sessions: [SessionSummary])] = []
         var seen = Set<String>()
         for ws in workspaces.workspaces {
             let key = Workspace.normalizePath(ws.path)
             if workspaces.isClosed(key) { continue }
-            if let list = buckets[key], !list.isEmpty {
-                result.append((key, list))
-                seen.insert(key)
-            }
+            result.append((key, buckets[key] ?? []))
+            seen.insert(key)
         }
         for path in order where !seen.contains(path) {
             if workspaces.isClosed(path) { continue }
@@ -97,6 +170,20 @@ final class AppModel: ObservableObject {
     var recentSessionsUnlisted: [SessionSummary] {
         let projectIds = Set(sessionsByWorkspacePath.flatMap(\.sessions).map(\.id))
         return sessions.filter { !projectIds.contains($0.id) }
+    }
+
+    /// Make a bookmarked project the active cwd (for New task) without opening a session.
+    func activateProject(path: String) {
+        let key = Workspace.normalizePath(path)
+        guard !key.isEmpty, !workspaces.isClosed(key) else { return }
+        if let ws = workspaces.workspaces.first(where: {
+            Workspace.normalizePath($0.path) == key
+        }) {
+            workspaces.selectAndTouch(ws.id)
+        } else {
+            workspaces.add(path: key, select: true)
+        }
+        newTask()
     }
 
     /// Present a user-facing banner (replaces any current one).
@@ -159,7 +246,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Archive a task (soft-delete). Removed from Projects/Recents; purged after 7 days by orch.
-    /// Caller should confirm; archived tasks remain under Archived for retention.
+    /// Archived tasks remain under Archived for retention (no confirm — soft-delete is reversible in the window).
     func archiveSession(_ id: String) {
         Task {
             do {
@@ -170,11 +257,6 @@ final class AppModel: ObservableObject {
                 if selectedSessionId == id {
                     newTask()
                 }
-                presentBanner(
-                    .info(
-                        "Task archived. It stays under Archived for 7 days, then is deleted permanently."
-                    )
-                )
             } catch {
                 presentError(error)
             }
@@ -231,7 +313,7 @@ final class AppModel: ObservableObject {
     func restart() {
         shutdown()
         phase = .idle
-        connectionLabel = "Disconnected"
+        connectionLabel = "Orchestrator offline"
         banner = nil
         startTask = Task { await bootstrap() }
     }
@@ -259,9 +341,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Add a workspace folder (New project).
+    /// Add a workspace folder (New project). Always lands in the sidebar; becomes active cwd.
     func newProject() {
-        _ = workspaces.pickAndAdd()
+        guard workspaces.pickAndAdd() != nil else { return }
+        newTask()
     }
 
     func selectSession(_ id: String?) {
@@ -321,14 +404,12 @@ final class AppModel: ObservableObject {
     }
 
     /// Home composer: create session in selected workspace, then send the first message.
+    /// Caller (home UI) should resolve a workspace before calling when none is selected.
     func startTaskFromHome() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
         guard case .ready = phase else { return }
 
-        if workspaces.selected == nil {
-            guard workspaces.pickAndAdd() != nil else { return }
-        }
         guard let ws = workspaces.selected else {
             presentBanner(.warning("Choose a workspace folder first"))
             return
@@ -346,10 +427,14 @@ final class AppModel: ObservableObject {
                 }
             }
             do {
+                // Fresh catalog so a harness that updated offerings mid-session is used.
+                await refreshModels()
+                guard generation == taskOpGeneration, selectedSessionId == nil else { return }
                 let session = try await client.createSession(
                     cwd: ws.path,
                     title: title,
-                    harnessId: selectedHarnessId
+                    harnessId: selectedHarnessId,
+                    model: selectedModelRef
                 )
                 // User navigated away (home → other session, or New task) — keep the
                 // created session in the list but do not steal selection/subscription.
@@ -360,7 +445,10 @@ final class AppModel: ObservableObject {
                     return
                 }
                 sessions.insert(session, at: 0)
-                selectedSessionId = session.id
+                // Switch into the task as soon as it exists so start doesn't linger on home.
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    selectedSessionId = session.id
+                }
                 workspaces.touch(ws.id)
                 workspaces.rememberPath(session.cwd)
                 await subscribe(to: session.id, afterSeq: 0, reset: true)
@@ -417,10 +505,10 @@ final class AppModel: ObservableObject {
                 }
             )
 
-            connectionLabel = "Launching sidecar…"
+            connectionLabel = "Launching orchestrator…"
             let info = try host.start(paths: paths)
 
-            connectionLabel = "Connecting…"
+            connectionLabel = "Connecting to orchestrator…"
             try await client.connect(endpoint: info.endpoint, token: info.token)
 
             let list = try await client.listSessions(filter: "active")
@@ -435,7 +523,8 @@ final class AppModel: ObservableObject {
             workspaces.ensureSelection()
             await refreshHarnesses()
             phase = .ready
-            connectionLabel = "Connected"
+            // Healthy: UI hides status; keep label for a11y / debug if needed.
+            connectionLabel = "Orchestrator ready"
             if let loadError = workspaces.loadError {
                 presentBanner(.warning(loadError))
             }
@@ -446,7 +535,7 @@ final class AppModel: ObservableObject {
             }
         } catch {
             phase = .failed(error.localizedDescription)
-            connectionLabel = "Error"
+            connectionLabel = "Orchestrator unavailable"
             presentError(error)
         }
     }
@@ -527,13 +616,83 @@ final class AppModel: ObservableObject {
             } else {
                 selectedHarnessId = list.first?.id
             }
+            await refreshModels()
         } catch {
             harnesses = []
             selectedHarnessId = nil
+            models = []
+            selectedModelId = nil
+            selectedReasoningEffortId = nil
             // Surface only if we are otherwise ready — bootstrap will set banner on hard fail.
             if case .ready = phase {
                 presentError(error)
             }
+        }
+    }
+
+    /// Reload model catalog for the selected harness. Driven by `models_list` cap.
+    /// Always hits orch → adapter (no shell cache) so updated harness offerings appear.
+    private func refreshModels() async {
+        modelsFetchGeneration &+= 1
+        let generation = modelsFetchGeneration
+        let harnessId = selectedHarnessId
+
+        guard let harness = selectedHarness, harness.supportsModelsList else {
+            if generation == modelsFetchGeneration {
+                models = []
+                selectedModelId = nil
+                selectedReasoningEffortId = nil
+                isLoadingModels = false
+            }
+            return
+        }
+
+        isLoadingModels = true
+        defer {
+            if generation == modelsFetchGeneration {
+                isLoadingModels = false
+            }
+        }
+
+        do {
+            let list = try await client.listModels(harnessId: harness.id)
+            // Drop stale replies (harness switched or a newer fetch started).
+            guard generation == modelsFetchGeneration, selectedHarnessId == harnessId else { return }
+            applyModelsList(list)
+        } catch {
+            guard generation == modelsFetchGeneration, selectedHarnessId == harnessId else { return }
+            // Keep the last good catalog on refresh failure; only wipe when we had nothing.
+            if models.isEmpty {
+                selectedModelId = nil
+                selectedReasoningEffortId = nil
+            }
+            if case .ready = phase {
+                presentError(error)
+            }
+        }
+    }
+
+    /// Apply a fresh models.list payload, preserving selection when still valid.
+    private func applyModelsList(_ list: [ModelInfo]) {
+        models = list
+        if let selectedModelId, let match = list.first(where: { $0.id == selectedModelId }) {
+            if match.supportsReasoning {
+                if let selectedReasoningEffortId,
+                   match.efforts.contains(where: { $0.id == selectedReasoningEffortId })
+                {
+                    // keep effort
+                } else {
+                    selectedReasoningEffortId = match.preferredEffortId
+                }
+            } else {
+                selectedReasoningEffortId = nil
+            }
+        } else if let first = list.first {
+            selectedModelId = first.id
+            selectedReasoningEffortId = first.preferredEffortId
+        } else {
+            selectedModelId = nil
+            selectedReasoningEffortId = nil
         }
     }
 
@@ -568,18 +727,25 @@ final class AppModel: ObservableObject {
     private func applyConnectionState(_ state: OrchClient.ConnectionState) {
         switch state {
         case .disconnected:
-            connectionLabel = "Disconnected"
+            // Only surface while not already in a hard failed phase with its own copy.
+            if case .ready = phase {
+                connectionLabel = "Orchestrator offline"
+            } else if case .failed = phase {
+                // keep existing failure label
+            } else {
+                connectionLabel = "Orchestrator offline"
+            }
         case .connecting:
-            connectionLabel = "Connecting…"
+            connectionLabel = "Connecting to orchestrator…"
         case .authenticating:
-            connectionLabel = "Authenticating…"
+            connectionLabel = "Authenticating with orchestrator…"
         case .connected:
-            connectionLabel = "Connected"
+            connectionLabel = "Orchestrator ready"
             if case .ready = phase { banner = nil }
         case .failed:
-            connectionLabel = "Connection lost"
+            connectionLabel = "Orchestrator connection lost"
             phase = .failed("Connection lost")
-            presentBanner(.error("Lost connection to the orchestrator", action: .restart))
+            presentBanner(.error("Lost connection to the local orchestrator", action: .restart))
         }
     }
 }

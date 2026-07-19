@@ -4,12 +4,19 @@ import SwiftUI
 struct CodeFreeApp: App {
     @StateObject private var model = AppModel()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage(AppearancePreference.storageKey)
+    private var appearanceRaw = AppearancePreference.system.rawValue
+
+    private var preferredScheme: ColorScheme? {
+        (AppearancePreference(rawValue: appearanceRaw) ?? .system).colorScheme
+    }
 
     var body: some Scene {
         WindowGroup("Code Free") {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(model.workspaces)
+                .preferredColorScheme(preferredScheme)
                 .frame(minWidth: 900, minHeight: 560)
                 .onAppear {
                     appDelegate.model = model
@@ -28,6 +35,10 @@ struct CodeFreeApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
+        }
+
+        Settings {
+            SettingsView()
         }
     }
 }

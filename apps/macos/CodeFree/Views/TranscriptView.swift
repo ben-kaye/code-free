@@ -18,6 +18,8 @@ struct TranscriptPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
+        // Soft cross-fade when leaving home → new task (and when switching sessions).
+        .animation(.easeInOut(duration: 0.18), value: model.selectedSessionId)
         .alert("Rename Task", isPresented: $showingRename) {
             TextField("Title", text: $renameDraft)
             Button("Save") {
@@ -48,8 +50,11 @@ struct TranscriptPane: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(QuietButtonStyle(cornerRadius: 6, hoverOpacity: 0.06, pressedOpacity: 0.1))
             .help(session.isArchived ? session.displayTitle : "Rename task")
             .accessibilityLabel(
                 session.isArchived
@@ -164,6 +169,7 @@ struct TranscriptScrollView: View {
 
                 if showJumpToLatest {
                     Button {
+                        InteractionFeedback.click()
                         stickToBottom = true
                         showJumpToLatest = false
                         scrollToBottom(proxy: proxy, animated: true)
@@ -175,8 +181,9 @@ struct TranscriptScrollView: View {
                             .background(.ultraThinMaterial, in: Capsule())
                             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ChipButtonStyle())
                     .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                     .accessibilityLabel("Jump to latest messages")
                 }
             }

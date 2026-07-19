@@ -22,13 +22,17 @@ struct ComposerView: View {
                     canSend: canSend,
                     isSending: model.isSending,
                     focused: $focused,
-                    onSend: { model.sendMessage() }
+                    onSend: {
+                        InteractionFeedback.click()
+                        model.sendMessage()
+                    }
                 )
 
                 HStack {
-                    Text("⌘↩ to send · Return for newline")
+                    Text(hintText)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .animation(.easeOut(duration: 0.15), value: model.isSending)
                     Spacer()
                 }
                 .padding(.horizontal, 4)
@@ -43,6 +47,13 @@ struct ComposerView: View {
 
     private var isArchived: Bool {
         model.selectedSession?.isArchived == true
+    }
+
+    private var hintText: String {
+        if model.isSending {
+            return "Sending…"
+        }
+        return "⌘↩ to send · Return for newline"
     }
 
     private var canSend: Bool {
@@ -65,52 +76,82 @@ struct MessageComposerField: View {
     var onSend: () -> Void
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .bottom, spacing: 12) {
             TextField(placeholder, text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.body)
-                .lineLimit(1...10)
+                .lineLimit(1...12)
                 .focused(focused)
                 .disabled(isSending)
+                .opacity(isSending ? 0.65 : 1)
+                .animation(.easeOut(duration: 0.15), value: isSending)
                 .accessibilityLabel(placeholder)
                 .accessibilityHint("Press Command Return to send. Return inserts a new line.")
 
-            Button(action: onSend) {
-                ZStack {
-                    if isSending {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 30, height: 30)
-                    } else {
-                        Image(systemName: "arrow.up")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(canSend ? Color.white : Color.secondary)
-                            .frame(width: 30, height: 30)
-                            .background(
-                                canSend ? Color.accentColor : Color.primary.opacity(0.08),
-                                in: Circle()
-                            )
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(!canSend || isSending)
-            .keyboardShortcut(.return, modifiers: [.command])
-            .help("Send (⌘↩)")
-            .accessibilityLabel(isSending ? "Sending" : "Send message")
-            .accessibilityHint("Command Return")
+            sendButton
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    focused.wrappedValue ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.10),
-                    lineWidth: focused.wrappedValue ? 1.5 : 1
-                )
+                .strokeBorder(borderColor, lineWidth: focused.wrappedValue ? 1.5 : 1)
         )
+        .shadow(
+            color: .black.opacity(focused.wrappedValue ? 0.08 : 0.04),
+            radius: focused.wrappedValue ? 14 : 8,
+            y: focused.wrappedValue ? 4 : 2
+        )
+        .animation(.easeOut(duration: 0.18), value: focused.wrappedValue)
+        .animation(.easeOut(duration: 0.15), value: canSend)
+    }
+
+    private var borderColor: Color {
+        if focused.wrappedValue {
+            return Color.accentColor.opacity(0.50)
+        }
+        return Color.primary.opacity(0.10)
+    }
+
+    private var sendButton: some View {
+        Button(action: onSend) {
+            ZStack {
+                Circle()
+                    .fill(sendBackground)
+                    .frame(width: 32, height: 32)
+
+                if isSending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(canSend || isSending ? Color.white.opacity(0.95) : Color.secondary)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(canSend ? Color.white : Color.secondary.opacity(0.85))
+                }
+            }
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(SendButtonStyle(isActive: canSend && !isSending))
+        .disabled(!canSend || isSending)
+        .keyboardShortcut(.return, modifiers: [.command])
+        .help(isSending ? "Sending…" : "Send (⌘↩)")
+        .accessibilityLabel(isSending ? "Sending" : "Send message")
+        .accessibilityHint("Command Return")
+        .animation(.easeInOut(duration: 0.18), value: canSend)
+        .animation(.easeInOut(duration: 0.18), value: isSending)
+    }
+
+    private var sendBackground: Color {
+        if isSending {
+            return Color.accentColor.opacity(0.85)
+        }
+        if canSend {
+            return Color.accentColor
+        }
+        return Color.primary.opacity(0.08)
     }
 }

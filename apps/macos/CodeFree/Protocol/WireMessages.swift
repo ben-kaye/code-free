@@ -136,11 +136,103 @@ struct HarnessListCommand: Encodable, Sendable {
     let requestId: String
 }
 
+struct ModelsListCommand: Encodable, Sendable {
+    let kind: String = "models.list"
+    let requestId: String
+    let harnessId: String?
+}
+
 /// Harness descriptor from `harness.list` — id, display name, caps. No CLI/SDK details.
 struct HarnessInfo: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let caps: [String]
+
+    var supportsModelsList: Bool { caps.contains("models_list") }
+}
+
+/// One thinking / reasoning effort column in the model matrix.
+struct ReasoningEffortInfo: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String?
+    let isDefault: Bool?
+
+    var displayLabel: String {
+        if let label, !label.isEmpty { return label }
+        return id.capitalized
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, label
+        case isDefault = "default"
+    }
+}
+
+/// Model catalog entry from `models.list`. Rows of the model × thinking matrix.
+struct ModelInfo: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String?
+    let reasoningEfforts: [ReasoningEffortInfo]?
+    let defaultReasoningEffort: String?
+
+    var displayName: String {
+        if let name, !name.isEmpty { return name }
+        return id
+    }
+
+    var efforts: [ReasoningEffortInfo] {
+        reasoningEfforts ?? []
+    }
+
+    var supportsReasoning: Bool { !efforts.isEmpty }
+
+    var preferredEffortId: String? {
+        if let defaultReasoningEffort,
+           efforts.contains(where: { $0.id == defaultReasoningEffort })
+        {
+            return defaultReasoningEffort
+        }
+        return efforts.first(where: { $0.isDefault == true })?.id ?? efforts.first?.id
+    }
+
+    /// Compact chip label for an effort (or just the model name when no efforts).
+    func selectionLabel(effortId: String?) -> String {
+        guard supportsReasoning, let effortId,
+              let effort = efforts.first(where: { $0.id == effortId })
+        else {
+            return displayName
+        }
+        return "\(displayName) · \(effort.displayLabel)"
+    }
+}
+
+/// Durable session.model value: `id` or `id#effort`.
+enum ModelRef {
+    static let separator: Character = "#"
+
+    static func encode(modelId: String, effortId: String?) -> String {
+        let id = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return id }
+        guard let effortId else { return id }
+        let effort = effortId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !effort.isEmpty else { return id }
+        return "\(id)\(separator)\(effort)"
+    }
+
+    static func parse(_ raw: String?) -> (modelId: String?, effortId: String?) {
+        guard let raw else { return (nil, nil) }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return (nil, nil) }
+        guard let idx = trimmed.lastIndex(of: separator),
+              idx > trimmed.startIndex,
+              idx < trimmed.index(before: trimmed.endIndex)
+        else {
+            return (trimmed, nil)
+        }
+        let modelId = String(trimmed[..<idx])
+        let effortId = String(trimmed[trimmed.index(after: idx)...])
+        return (modelId, effortId)
+    }
 }
 
 struct SessionListCommand: Encodable, Sendable {

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
-    /// Inspector hidden by default — it is empty until artifacts/sources exist.
+    /// Inspector hidden by default — empty until the user opens it or has artifacts.
     @State private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
 
     var body: some View {
@@ -19,16 +19,21 @@ struct ContentView: View {
         }
         .navigationTitle(model.windowTitle)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                connectionPill
+            // Healthy = quiet. Only show orch status while starting or failed.
+            ToolbarItem(placement: .status) {
+                connectionStatus
             }
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     if case .failed = model.phase {
-                        Button("Restart") { model.restart() }
-                            .help("Restart the orchestrator")
+                        Button("Restart") {
+                            InteractionFeedback.click()
+                            model.restart()
+                        }
+                        .help("Restart the local orchestrator")
                     }
                     Button {
+                        InteractionFeedback.click()
                         withAnimation(.easeInOut(duration: 0.15)) {
                             columnVisibility = columnVisibility == .all ? .doubleColumn : .all
                         }
@@ -58,36 +63,47 @@ struct ContentView: View {
         .onChange(of: model.windowTitle) { _, title in
             NSApp.keyWindow?.title = title
         }
+        .onChange(of: model.selectedSessionId) { _, id in
+            // Home / no session: collapse empty inspector so the composer owns the canvas.
+            if id == nil, columnVisibility == .all {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    columnVisibility = .doubleColumn
+                }
+            }
+        }
         .onAppear {
             NSApp.keyWindow?.title = model.windowTitle
         }
     }
 
-    private var connectionPill: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(connectionColor)
-                .frame(width: 7, height: 7)
-                .accessibilityHidden(true)
-            Text(model.connectionLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.6), in: Capsule())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Connection: \(model.connectionLabel)")
-    }
-
-    private var connectionColor: Color {
+    /// No capsule chrome. Hidden when ready — healthy state should not shout.
+    @ViewBuilder
+    private var connectionStatus: some View {
         switch model.phase {
         case .ready:
-            return .green
+            EmptyView()
         case .starting, .idle:
-            return .orange
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text(model.connectionLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(model.connectionLabel)
         case .failed:
-            return .red
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Color.red.opacity(0.9))
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+                Text(model.connectionLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(model.connectionLabel)
         }
     }
 }
@@ -108,10 +124,13 @@ struct BannerView: View {
                 .foregroundStyle(.primary)
             Spacer(minLength: 8)
             if let action = banner.action, let label = banner.actionLabel {
-                Button(label) { onAction(action) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(accentColor)
+                Button(label) {
+                    InteractionFeedback.click()
+                    onAction(action)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(accentColor)
             }
             Button {
                 onDismiss()
@@ -119,9 +138,10 @@ struct BannerView: View {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .padding(4)
+                    .padding(6)
+                    .contentShape(Circle())
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(QuietButtonStyle(cornerRadius: 6, hoverOpacity: 0.08, pressedOpacity: 0.14))
             .help("Dismiss")
             .accessibilityLabel("Dismiss")
         }

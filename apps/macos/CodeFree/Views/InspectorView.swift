@@ -28,7 +28,7 @@ struct InspectorView: View {
 
     private var outputsCopy: String {
         if model.selectedSession == nil {
-            return "Outputs from a task appear here when the harness produces artifacts."
+            return "Open a task to see harness outputs and artifacts."
         }
         if model.selectedSession?.isArchived == true {
             return "No artifacts for this archived task."
@@ -38,7 +38,7 @@ struct InspectorView: View {
 
     private var sourcesCopy: String {
         if model.selectedSession == nil {
-            return "Attachments and sources for a task appear here."
+            return "Open a task to see attachments and sources."
         }
         return "No attachments yet."
     }

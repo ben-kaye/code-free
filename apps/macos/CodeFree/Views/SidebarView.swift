@@ -6,7 +6,6 @@ struct SidebarView: View {
     /// Paths the user has collapsed; absent paths default to expanded.
     @State private var collapsedProjects: Set<String> = []
     @State private var archivedExpanded = false
-    @State private var sessionPendingArchive: SessionSummary?
     @State private var projectPendingClose: String?
     @State private var renameTarget: SessionSummary?
     @State private var renameDraft = ""
@@ -22,19 +21,33 @@ struct SidebarView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            // Navigates to the home composer — create happens there, not a second form.
             Button {
+                InteractionFeedback.click()
                 model.newTask()
             } label: {
                 Label("New task", systemImage: "square.and.pencil")
+                    .font(.body.weight(isOnHome ? .semibold : .regular))
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        isOnHome
+                            ? Color.accentColor.opacity(0.14)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                    .foregroundStyle(isOnHome ? Color.accentColor : Color.primary)
+                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 12)
+            .buttonStyle(QuietButtonStyle(cornerRadius: 8, hoverOpacity: isOnHome ? 0 : 0.07, pressedOpacity: isOnHome ? 0.08 : 0.12))
+            .padding(.horizontal, 8)
             .padding(.bottom, 8)
             .disabled(!isReady)
             .keyboardShortcut("n", modifiers: [.command])
-            .help("New task (⌘N)")
+            .help("New task — open the home composer (⌘N)")
             .accessibilityLabel("New task")
+            .accessibilityAddTraits(isOnHome ? .isSelected : [])
 
             List(selection: Binding(
                 get: { model.selectedSessionId },
@@ -44,23 +57,31 @@ struct SidebarView: View {
                     Section("Projects") {
                         ForEach(model.sessionsByWorkspacePath, id: \.path) { group in
                             DisclosureGroup(isExpanded: expansionBinding(for: group.path)) {
-                                ForEach(group.sessions) { session in
-                                    SessionRow(
-                                        session: session,
-                                        showPath: false,
-                                        onArchive: { sessionPendingArchive = session },
-                                        onRename: {
-                                            renameTarget = session
-                                            renameDraft = session.title ?? session.displayTitle
-                                        }
-                                    )
-                                    .tag(session.id)
+                                if group.sessions.isEmpty {
+                                    Text("No tasks yet")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                        .listRowSeparator(.hidden)
+                                } else {
+                                    ForEach(group.sessions) { session in
+                                        SessionRow(
+                                            session: session,
+                                            showPath: false,
+                                            onArchive: { model.archiveSession(session.id) },
+                                            onRename: {
+                                                renameTarget = session
+                                                renameDraft = session.title ?? session.displayTitle
+                                            }
+                                        )
+                                        .tag(session.id)
+                                    }
                                 }
                             } label: {
                                 WorkspaceGroupLabel(
                                     path: group.path,
                                     name: workspaceName(for: group.path),
                                     count: group.sessions.count,
+                                    onSelect: { model.activateProject(path: group.path) },
                                     onClose: { projectPendingClose = group.path }
                                 )
                             }
@@ -84,7 +105,7 @@ struct SidebarView: View {
                             SessionRow(
                                 session: session,
                                 showPath: true,
-                                onArchive: { sessionPendingArchive = session },
+                                onArchive: { model.archiveSession(session.id) },
                                 onRename: {
                                     renameTarget = session
                                     renameDraft = session.title ?? session.displayTitle
@@ -123,40 +144,23 @@ struct SidebarView: View {
 
             Divider()
             Button {
+                InteractionFeedback.click()
                 model.newProject()
             } label: {
                 Label("New project", systemImage: "folder.badge.plus")
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .buttonStyle(QuietButtonStyle(cornerRadius: 8))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
             .disabled(!isReady)
             .help("Add a workspace folder")
             .accessibilityLabel("New project")
         }
         .background(.background)
-        .confirmationDialog(
-            "Archive this task?",
-            isPresented: Binding(
-                get: { sessionPendingArchive != nil },
-                set: { if !$0 { sessionPendingArchive = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: sessionPendingArchive
-        ) { session in
-            Button("Archive", role: .destructive) {
-                model.archiveSession(session.id)
-                sessionPendingArchive = nil
-            }
-            Button("Cancel", role: .cancel) {
-                sessionPendingArchive = nil
-            }
-        } message: { session in
-            Text(
-                "“\(session.displayTitle)” moves to Archived and is permanently deleted after 7 days. There is no undo after that."
-            )
-        }
         .confirmationDialog(
             "Close this project?",
             isPresented: Binding(
@@ -227,12 +231,17 @@ struct SidebarView: View {
         return false
     }
 
+    /// Home composer is active when no session is selected.
+    private var isOnHome: Bool {
+        model.selectedSessionId == nil
+    }
+
     private var emptyLabel: String {
         switch model.phase {
         case .starting, .idle:
-            return "Starting…"
+            return "Starting orchestrator…"
         case .failed:
-            return "Unavailable"
+            return "Orchestrator unavailable"
         case .ready:
             return "No tasks yet"
         }
@@ -243,6 +252,7 @@ struct WorkspaceGroupLabel: View {
     let path: String
     let name: String
     let count: Int
+    var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
 
     var body: some View {
@@ -262,6 +272,9 @@ struct WorkspaceGroupLabel: View {
         .help(path)
         .accessibilityLabel("\(name), \(count) tasks")
         .contextMenu {
+            if let onSelect {
+                Button("New task here") { onSelect() }
+            }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             }
@@ -305,7 +318,7 @@ struct SessionRow: View {
             }
             if let onArchive {
                 Divider()
-                Button("Archive task…", role: .destructive) {
+                Button("Archive task", role: .destructive) {
                     onArchive()
                 }
             }
