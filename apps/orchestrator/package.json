@@ -2,6 +2,7 @@
   "name": "@code-free/orchestrator",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "code-free-orch": "./dist/cli.js"
