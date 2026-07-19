@@ -44,6 +44,40 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(items[1].kind, .error)
     }
 
+    func testToolLifecycleCoalesces() {
+        let events = [
+            event(seq: 1, type: "tool.started", payload: [
+                "name": .string("shell"),
+                "summary": .string("ls"),
+            ]),
+            event(seq: 2, type: "tool.progress", payload: [
+                "name": .string("shell"),
+                "summary": .string("running"),
+            ]),
+            event(seq: 3, type: "tool.done", payload: [
+                "name": .string("shell"),
+                "summary": .string("ok"),
+            ]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].kind, .tool)
+        XCTAssertTrue(items[0].text.contains("Done"))
+        XCTAssertTrue(items[0].text.contains("shell"))
+    }
+
+    func testSecondToolInvocationAppends() {
+        let events = [
+            event(seq: 1, type: "tool.started", payload: ["name": .string("shell")]),
+            event(seq: 2, type: "tool.done", payload: ["name": .string("shell")]),
+            event(seq: 3, type: "tool.started", payload: ["name": .string("shell")]),
+        ]
+        let items = TranscriptReducer.reduce(events)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertTrue(items[0].text.contains("Done"))
+        XCTAssertTrue(items[1].text.contains("Running"))
+    }
+
     private func event(seq: Int, type: String, payload: [String: JSONValue]) -> EventFrame {
         // Build via JSON round-trip to use Decodable init
         let dict: [String: Any] = [

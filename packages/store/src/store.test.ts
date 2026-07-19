@@ -87,4 +87,34 @@ describe("EventStore", () => {
     );
     store.close();
   });
+
+  it("archives sessions out of active list and blocks append", () => {
+    const store = new EventStore({ dataRoot: tempRoot() });
+    const s = store.createSession({ cwd: "/proj", title: "Keep" });
+    store.appendEvent(s.id, { type: "session.started", payload: {} });
+    const archived = store.archiveSession(s.id);
+    expect(archived.archivedAt).toBeTruthy();
+    expect(store.listSessions("active")).toHaveLength(0);
+    expect(store.listSessions("archived")).toHaveLength(1);
+    expect(() => store.appendEvent(s.id, { type: "log", payload: {} })).toThrow(
+      /archived/i,
+    );
+    // Replay still works
+    expect(store.listEventsAfter(s.id, 0)).toHaveLength(1);
+    store.close();
+  });
+
+  it("purges archives older than retention", () => {
+    const root = tempRoot();
+    const store = new EventStore({ dataRoot: root });
+    const s = store.createSession({ cwd: "/proj" });
+    store.archiveSession(s.id);
+    // Fresh archive is within retention
+    expect(store.purgeExpiredArchives(7 * 24 * 60 * 60 * 1000)).toBe(0);
+    // Zero retention = everything archived is expired
+    expect(store.purgeExpiredArchives(0)).toBe(1);
+    expect(store.getSession(s.id)).toBeNull();
+    store.close();
+  });
 });
+

@@ -1,19 +1,21 @@
 import SwiftUI
 
 struct InspectorView: View {
+    @EnvironmentObject private var model: AppModel
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 section(title: "Outputs") {
                     placeholder(
                         icon: "folder",
-                        text: "Artifacts appear here when a harness emits them (Phase 4)."
+                        text: outputsCopy
                     )
                 }
                 section(title: "Sources") {
                     placeholder(
                         icon: "doc.text",
-                        text: "Attachments and sources will list here."
+                        text: sourcesCopy
                     )
                 }
             }
@@ -21,6 +23,24 @@ struct InspectorView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(.background)
+        .navigationTitle("Inspector")
+    }
+
+    private var outputsCopy: String {
+        if model.selectedSession == nil {
+            return "Outputs from a task appear here when the harness produces artifacts."
+        }
+        if model.selectedSession?.isArchived == true {
+            return "No artifacts for this archived task."
+        }
+        return "No artifacts yet. Files and results from the harness show up here."
+    }
+
+    private var sourcesCopy: String {
+        if model.selectedSession == nil {
+            return "Attachments and sources for a task appear here."
+        }
+        return "No attachments yet."
     }
 
     private func section(title: String, @ViewBuilder content: () -> some View) -> some View {
@@ -36,6 +56,7 @@ struct InspectorView: View {
         VStack(alignment: .leading, spacing: 8) {
             Image(systemName: icon)
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             Text(text)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -43,6 +64,9 @@ struct InspectorView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
     }
 }

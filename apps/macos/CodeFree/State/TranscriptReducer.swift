@@ -217,16 +217,55 @@ enum TranscriptReducer {
                 ?? "tool"
             let detail = payload["summary"]?.stringValue
                 ?? payload["message"]?.stringValue
-                ?? event.type
-            items.append(
-                TranscriptItem(
-                    id: "\(event.seq)-tool",
-                    kind: .tool,
-                    text: "\(name): \(detail)",
-                    seq: event.seq,
-                    messageId: nil
+            let phase: String = {
+                switch event.type {
+                case "tool.started": return "Running"
+                case "tool.progress": return "Working"
+                case "tool.done": return "Done"
+                case "tool.error": return "Failed"
+                default: return event.type
+                }
+            }()
+            let text: String = {
+                if let detail, !detail.isEmpty, detail != event.type {
+                    return "\(name) · \(phase) — \(detail)"
+                }
+                return "\(name) · \(phase)"
+            }()
+            // Collapse lifecycle of the same open tool into one row.
+            if let idx = items.lastIndex(where: { $0.kind == .tool && $0.messageId == name }) {
+                let prev = items[idx]
+                let isOpen = prev.text.contains("· Running") || prev.text.contains("· Working")
+                if event.type == "tool.started", !isOpen {
+                    items.append(
+                        TranscriptItem(
+                            id: "\(event.seq)-tool",
+                            kind: .tool,
+                            text: text,
+                            seq: event.seq,
+                            messageId: name
+                        )
+                    )
+                } else {
+                    items[idx] = TranscriptItem(
+                        id: prev.id,
+                        kind: .tool,
+                        text: text,
+                        seq: event.seq,
+                        messageId: name
+                    )
+                }
+            } else {
+                items.append(
+                    TranscriptItem(
+                        id: "\(event.seq)-tool",
+                        kind: .tool,
+                        text: text,
+                        seq: event.seq,
+                        messageId: name
+                    )
                 )
-            )
+            }
 
         case "status", "status.turn_start", "log", "raw":
             break

@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   harness_id TEXT,
   model TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -25,4 +26,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_sessions_archived_at ON sessions(archived_at);
 `;
+
+/** Soft-deleted sessions are purged this long after archive. */
+export const ARCHIVE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;

@@ -8,9 +8,7 @@
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "dist"],
   "references": [
-    { "path": "../../packages/protocol" },
-    { "path": "../../packages/adapter-core" },
-    { "path": "../../packages/adapter-grok-build" },
-    { "path": "../../packages/store" }
+    { "path": "../protocol" },
+    { "path": "../adapter-core" }
   ]
 }

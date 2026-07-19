@@ -21,7 +21,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastSeq: Int = 0
     @Published var composerText: String = ""
     @Published private(set) var isSending: Bool = false
-    @Published var banner: String?
+    /// True while the first snapshot for the selected session is loading.
+    @Published private(set) var isLoadingTranscript: Bool = false
+    @Published var banner: UserBanner?
 
     /// From `harness.list`. Empty until an adapter is registered (honest empty UI).
     @Published private(set) var harnesses: [HarnessInfo] = []
@@ -91,6 +93,65 @@ final class AppModel: ObservableObject {
         return result
     }
 
+    /// Recent tasks not already listed under Projects (no double-listing).
+    var recentSessionsUnlisted: [SessionSummary] {
+        let projectIds = Set(sessionsByWorkspacePath.flatMap(\.sessions).map(\.id))
+        return sessions.filter { !projectIds.contains($0.id) }
+    }
+
+    /// Present a user-facing banner (replaces any current one).
+    func presentBanner(_ banner: UserBanner) {
+        self.banner = banner
+    }
+
+    func dismissBanner() {
+        banner = nil
+    }
+
+    /// Run the banner's primary recovery action, then dismiss.
+    func performBannerAction(_ action: UserBanner.Action) {
+        banner = nil
+        switch action {
+        case .newTask:
+            newTask()
+        case .restart:
+            restart()
+        }
+    }
+
+    private func presentError(_ error: Error) {
+        if let wire = error as? WireError, case .commandFailed(let code, _) = wire,
+           code == "session_not_found"
+        {
+            handleSessionMissing()
+        }
+        presentBanner(UserBanner.from(error: error))
+    }
+
+    private func presentServerError(_ err: ErrorFrame) {
+        if err.code == "session_not_found" {
+            if let sid = err.sessionId {
+                sessions.removeAll { $0.id == sid }
+                archivedSessions.removeAll { $0.id == sid }
+                if selectedSessionId == sid {
+                    newTask()
+                }
+            } else {
+                handleSessionMissing()
+            }
+        }
+        presentBanner(UserBanner.from(code: err.code, message: err.message))
+    }
+
+    /// Drop a dead selection when the orch no longer has the session.
+    private func handleSessionMissing() {
+        if let id = selectedSessionId {
+            sessions.removeAll { $0.id == id }
+            archivedSessions.removeAll { $0.id == id }
+            newTask()
+        }
+    }
+
     /// Close a project from the sidebar. Does not delete sessions.
     func closeProject(path: String) {
         workspaces.close(path: path)
@@ -98,6 +159,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Archive a task (soft-delete). Removed from Projects/Recents; purged after 7 days by orch.
+    /// Caller should confirm; archived tasks remain under Archived for retention.
     func archiveSession(_ id: String) {
         Task {
             do {
@@ -108,10 +170,48 @@ final class AppModel: ObservableObject {
                 if selectedSessionId == id {
                     newTask()
                 }
+                presentBanner(
+                    .info(
+                        "Task archived. It stays under Archived for 7 days, then is deleted permanently."
+                    )
+                )
             } catch {
-                banner = error.localizedDescription
+                presentError(error)
             }
         }
+    }
+
+    /// Rename a task. Empty title is rejected.
+    func renameSession(_ id: String, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            do {
+                let updated = try await client.rename(sessionId: id, title: trimmed)
+                if let idx = sessions.firstIndex(where: { $0.id == id }) {
+                    sessions[idx] = updated
+                } else if let idx = archivedSessions.firstIndex(where: { $0.id == id }) {
+                    archivedSessions[idx] = updated
+                }
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
+    /// Signature for scroll/auto-follow: changes when count, last text, or last seq changes.
+    var transcriptContentSignature: String {
+        guard let last = transcript.last else {
+            return "empty-\(isLoadingTranscript)"
+        }
+        return "\(transcript.count)|\(last.id)|\(last.seq)|\(last.text.count)"
+    }
+
+    var windowTitle: String {
+        if let session = selectedSession {
+            return session.displayTitle
+        }
+        return "Code Free"
     }
 
     func start() {
@@ -146,13 +246,14 @@ final class AppModel: ObservableObject {
         selectedSessionId = nil
         transcript = []
         lastSeq = 0
+        isLoadingTranscript = false
         subscribedSessionId = nil
         if let prev {
             Task {
                 do {
                     try await client.unsubscribe(sessionId: prev)
                 } catch {
-                    banner = error.localizedDescription
+                    presentError(error)
                 }
             }
         }
@@ -193,7 +294,7 @@ final class AppModel: ObservableObject {
             return
         }
         if selectedSession?.isArchived == true {
-            banner = "Archived tasks are read-only"
+            presentBanner(.info("Archived tasks are read-only"))
             return
         }
         isSending = true
@@ -203,7 +304,7 @@ final class AppModel: ObservableObject {
             do {
                 // Auto-title from first message if still default
                 if let session = selectedSession, session.title == nil {
-                    let title = String(text.prefix(48))
+                    let title = SessionSummary.titleFromMessage(text)
                     if let updated = try? await client.rename(sessionId: sessionId, title: title) {
                         if let idx = sessions.firstIndex(where: { $0.id == sessionId }) {
                             sessions[idx] = updated
@@ -212,7 +313,7 @@ final class AppModel: ObservableObject {
                 }
                 try await client.send(sessionId: sessionId, text: text)
             } catch {
-                banner = error.localizedDescription
+                presentError(error)
                 // Restore draft on failure
                 if composerText.isEmpty { composerText = text }
             }
@@ -229,7 +330,7 @@ final class AppModel: ObservableObject {
             guard workspaces.pickAndAdd() != nil else { return }
         }
         guard let ws = workspaces.selected else {
-            banner = "Choose a workspace folder first"
+            presentBanner(.warning("Choose a workspace folder first"))
             return
         }
 
@@ -237,7 +338,7 @@ final class AppModel: ObservableObject {
         let generation = taskOpGeneration
         isSending = true
         composerText = ""
-        let title = String(text.prefix(48))
+        let title = SessionSummary.titleFromMessage(text)
         Task {
             defer {
                 if generation == taskOpGeneration {
@@ -276,7 +377,7 @@ final class AppModel: ObservableObject {
                 try await client.send(sessionId: session.id, text: text)
             } catch {
                 guard generation == taskOpGeneration else { return }
-                banner = error.localizedDescription
+                presentError(error)
                 if composerText.isEmpty { composerText = text }
             }
         }
@@ -311,7 +412,7 @@ final class AppModel: ObservableObject {
                 },
                 onServerError: { [weak self] err in
                     Task { @MainActor in
-                        self?.banner = "\(err.code): \(err.message)"
+                        self?.presentServerError(err)
                     }
                 }
             )
@@ -336,7 +437,7 @@ final class AppModel: ObservableObject {
             phase = .ready
             connectionLabel = "Connected"
             if let loadError = workspaces.loadError {
-                banner = loadError
+                presentBanner(.warning(loadError))
             }
 
             // Open on the home orchestrator. Resuming a session is an explicit sidebar click.
@@ -346,20 +447,26 @@ final class AppModel: ObservableObject {
         } catch {
             phase = .failed(error.localizedDescription)
             connectionLabel = "Error"
-            banner = error.localizedDescription
+            presentError(error)
         }
     }
 
     private func subscribe(to sessionId: String, afterSeq: Int, reset: Bool) async {
+        if reset {
+            isLoadingTranscript = true
+            transcript = []
+            lastSeq = 0
+        }
         do {
             if let prev = subscribedSessionId, prev != sessionId {
                 try? await client.unsubscribe(sessionId: prev)
             }
             // User may have navigated away during unsubscribe.
-            guard selectedSessionId == sessionId else { return }
-            if reset {
-                transcript = []
-                lastSeq = 0
+            guard selectedSessionId == sessionId else {
+                if isLoadingTranscript, selectedSessionId != sessionId {
+                    isLoadingTranscript = false
+                }
+                return
             }
             subscribedSessionId = sessionId
             try await client.subscribe(sessionId: sessionId, afterSeq: afterSeq)
@@ -368,11 +475,18 @@ final class AppModel: ObservableObject {
                 if subscribedSessionId == sessionId {
                     subscribedSessionId = nil
                 }
+                isLoadingTranscript = false
                 try? await client.unsubscribe(sessionId: sessionId)
                 return
             }
+            // Snapshot may arrive via handler before or after this returns; clear loading
+            // once subscribe succeeds so empty sessions don't spin forever.
+            isLoadingTranscript = false
         } catch {
-            banner = error.localizedDescription
+            if selectedSessionId == sessionId {
+                isLoadingTranscript = false
+            }
+            presentError(error)
         }
     }
 
@@ -392,6 +506,9 @@ final class AppModel: ObservableObject {
         lastSeq = max(lastSeq, snap.lastSeq)
         if let maxEvent = snap.events.map(\.seq).max() {
             lastSeq = max(lastSeq, maxEvent)
+        }
+        if snap.sessionId == selectedSessionId {
+            isLoadingTranscript = false
         }
     }
 
@@ -415,7 +532,7 @@ final class AppModel: ObservableObject {
             selectedHarnessId = nil
             // Surface only if we are otherwise ready — bootstrap will set banner on hard fail.
             if case .ready = phase {
-                banner = error.localizedDescription
+                presentError(error)
             }
         }
     }
@@ -459,10 +576,10 @@ final class AppModel: ObservableObject {
         case .connected:
             connectionLabel = "Connected"
             if case .ready = phase { banner = nil }
-        case .failed(let msg):
+        case .failed:
             connectionLabel = "Connection lost"
-            banner = msg
-            phase = .failed(msg)
+            phase = .failed("Connection lost")
+            presentBanner(.error("Lost connection to the orchestrator", action: .restart))
         }
     }
 }

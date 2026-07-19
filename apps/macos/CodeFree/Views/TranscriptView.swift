@@ -2,13 +2,15 @@ import SwiftUI
 
 struct TranscriptPane: View {
     @EnvironmentObject private var model: AppModel
+    @State private var renameDraft = ""
+    @State private var showingRename = false
 
     var body: some View {
         VStack(spacing: 0) {
             if let session = model.selectedSession {
                 header(session)
                 Divider()
-                transcriptList
+                transcriptBody
                 Divider()
                 ComposerView()
             } else {
@@ -16,13 +18,46 @@ struct TranscriptPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .alert("Rename Task", isPresented: $showingRename) {
+            TextField("Title", text: $renameDraft)
+            Button("Save") {
+                if let id = model.selectedSessionId {
+                    model.renameSession(id, title: renameDraft)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Choose a short name for this task.")
+        }
     }
 
     private func header(_ session: SessionSummary) -> some View {
         HStack(spacing: 12) {
-            Text(session.displayTitle)
-                .font(.headline)
-                .lineLimit(1)
+            Button {
+                renameDraft = session.title ?? session.displayTitle
+                showingRename = true
+            } label: {
+                HStack(spacing: 6) {
+                    Text(session.displayTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    if !session.isArchived {
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(session.isArchived ? session.displayTitle : "Rename task")
+            .accessibilityLabel(
+                session.isArchived
+                    ? "Task title, \(session.displayTitle)"
+                    : "Task title, \(session.displayTitle). Click to rename."
+            )
+            .disabled(session.isArchived)
+
             if session.isArchived {
                 Text("Archived")
                     .font(.caption2.weight(.medium))
@@ -39,86 +74,129 @@ struct TranscriptPane: View {
         .padding(.vertical, 10)
     }
 
-    private var transcriptList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(model.transcript) { item in
-                        TranscriptRow(item: item)
-                            .id(item.id)
-                    }
-                }
-                .padding(20)
-                .frame(maxWidth: 720, alignment: .leading)
-                .frame(maxWidth: .infinity)
+    @ViewBuilder
+    private var transcriptBody: some View {
+        if model.isLoadingTranscript {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Loading conversation…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            .onChange(of: model.transcript.count) { _, _ in
-                if let last = model.transcript.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Loading conversation")
+        } else if model.transcript.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                Text(
+                    model.selectedSession?.isArchived == true
+                        ? "No messages in this archived task"
+                        : "No messages yet"
+                )
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                if model.selectedSession?.isArchived != true {
+                    Text("Describe what you need below. ⌘↩ to send.")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(32)
+        } else {
+            TranscriptScrollView()
         }
     }
 }
 
-struct TranscriptRow: View {
-    let item: TranscriptItem
+// MARK: - Scroll + stick-to-bottom
+
+struct TranscriptScrollView: View {
+    @EnvironmentObject private var model: AppModel
+    /// Follow the live end of the transcript unless the user scrolls away.
+    @State private var stickToBottom = true
+    @State private var showJumpToLatest = false
+    /// Ignores bottom-sentinel disappear caused by our own scroll / content growth.
+    @State private var ignoreBottomDisappear = false
+
+    private let bottomID = "transcript-bottom"
 
     var body: some View {
-        switch item.kind {
-        case .user:
-            HStack {
-                Spacer(minLength: 40)
-                Text(item.text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(model.transcript) { item in
+                            TranscriptRow(item: item)
+                                .id(item.id)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomID)
+                            .onAppear {
+                                stickToBottom = true
+                                showJumpToLatest = false
+                            }
+                            .onDisappear {
+                                guard !ignoreBottomDisappear else { return }
+                                stickToBottom = false
+                            }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
+                .onChange(of: model.transcriptContentSignature) { _, _ in
+                    if stickToBottom {
+                        scrollToBottom(proxy: proxy, animated: true)
+                    } else if !model.transcript.isEmpty {
+                        showJumpToLatest = true
+                    }
+                }
+                .onAppear {
+                    scrollToBottom(proxy: proxy, animated: false)
+                }
+
+                if showJumpToLatest {
+                    Button {
+                        stickToBottom = true
+                        showJumpToLatest = false
+                        scrollToBottom(proxy: proxy, animated: true)
+                    } label: {
+                        Label("Jump to latest", systemImage: "arrow.down")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 12)
+                    .accessibilityLabel("Jump to latest messages")
+                }
             }
-        case .assistant:
-            Text(item.text)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .thinking:
-            Text(item.text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .italic()
-                .textSelection(.enabled)
-        case .system:
-            Text(item.text)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 4)
-        case .error:
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.orange)
-                Text(item.text)
-                    .textSelection(.enabled)
-                    .font(.callout)
+        }
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        ignoreBottomDisappear = true
+        if animated {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo(bottomID, anchor: .bottom)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        case .timing:
-            Text(item.text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-        case .tool:
-            Label(item.text, systemImage: "wrench.and.screwdriver")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(8)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        case .debug:
-            Text(item.text)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.quaternary)
+        } else {
+            proxy.scrollTo(bottomID, anchor: .bottom)
+        }
+        stickToBottom = true
+        // Content growth can fire onDisappear on the sentinel mid-stream; keep stickiness.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            ignoreBottomDisappear = false
+            stickToBottom = true
         }
     }
 }

@@ -12,17 +12,29 @@ import {
   type Snapshot,
   type EventFrame,
   type ErrorFrame,
+  type EventDraft,
 } from "@code-free/protocol";
+import type { HarnessAdapter } from "@code-free/adapter-core";
+import { createGrokBuildAdapter } from "@code-free/adapter-grok-build";
 import { EventStore } from "@code-free/store";
 import type { OrchConfig } from "./config.js";
 import { Logger } from "./logger.js";
 import { SessionManager, SessionError } from "./sessions.js";
+import { AdapterHost } from "./adapter-host.js";
 import { ensureTokenFile, tokensEqual } from "./token.js";
 
 type ClientState = {
   authed: boolean;
   /** sessionId → true */
   subscriptions: Set<string>;
+};
+
+export type StartOrchestratorOptions = {
+  /**
+   * Adapters to register. Default: Grok Build.
+   * Pass `[]` to keep honest empty harness list (tests / no-adapter mode).
+   */
+  adapters?: HarnessAdapter[];
 };
 
 export type RunningOrch = {
@@ -37,10 +49,35 @@ export type RunningOrch = {
 export async function startOrchestrator(
   config: OrchConfig,
   log: Logger,
+  options: StartOrchestratorOptions = {},
 ): Promise<RunningOrch> {
   const token = ensureTokenFile(config.tokenFile);
   const store = new EventStore({ dataRoot: config.dataRoot });
-  const sessions = new SessionManager(store);
+
+  const broadcastRef: { fn: (sessionId: string, frame: EventFrame) => void } = {
+    fn: () => {},
+  };
+
+  const adapterHost = new AdapterHost((sessionId, draft: EventDraft) => {
+    try {
+      const frame = store.appendEvent(sessionId, draft);
+      broadcastRef.fn(sessionId, frame);
+    } catch (err) {
+      log.error("adapter emit failed", {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  });
+
+  const adapters =
+    options.adapters !== undefined ? options.adapters : [createGrokBuildAdapter()];
+  for (const a of adapters) {
+    adapterHost.register(a);
+  }
+
+  const sessions = new SessionManager(store, adapterHost);
   const purged = sessions.purgeExpiredArchives();
   if (purged > 0) {
     log.info(`purged ${purged} archived session(s) older than 7 days`);
@@ -66,6 +103,7 @@ export async function startOrchestrator(
       }
     }
   };
+  broadcastRef.fn = broadcast;
 
   const trackSub = (ws: WebSocket, sessionId: string, on: boolean) => {
     let set = subscribers.get(sessionId);
@@ -142,11 +180,18 @@ export async function startOrchestrator(
       }
 
       const cmd = parseClientCommand(raw);
-      const result = dispatch(cmd, st, socket);
-      socket.send(JSON.stringify(result));
+      void dispatch(cmd, st, socket).then((result) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(result));
+        }
+      });
     }
 
-    function dispatch(cmd: ClientCommand, st: ClientState, socket: WebSocket): CommandResult {
+    async function dispatch(
+      cmd: ClientCommand,
+      st: ClientState,
+      socket: WebSocket,
+    ): Promise<CommandResult> {
       try {
         switch (cmd.kind) {
           case "session.create": {
@@ -158,7 +203,6 @@ export async function startOrchestrator(
               seed: cmd.seed,
             });
             broadcast(session.id, started);
-            // if creator already subscribed somehow, still fine
             return ok(cmd.requestId, { session, event: started });
           }
           case "session.list": {
@@ -167,7 +211,6 @@ export async function startOrchestrator(
           }
           case "session.archive": {
             const session = sessions.archive(cmd.sessionId);
-            // Stop fan-out; shell clears local selection/subscription.
             subscribers.delete(cmd.sessionId);
             st.subscriptions.delete(cmd.sessionId);
             sessions.purgeExpiredArchives();
@@ -198,12 +241,21 @@ export async function startOrchestrator(
             return ok(cmd.requestId, { sessionId: cmd.sessionId });
           }
           case "session.send": {
-            const events = sessions.sendUserMessage(cmd.sessionId, cmd.text);
+            const { events, driveTurn } = sessions.beginUserMessage(cmd.sessionId, cmd.text);
             for (const ev of events) broadcast(cmd.sessionId, ev);
+            // Kick async turn after RPC returns events (stream continues via broadcast)
+            if (driveTurn) {
+              void driveTurn().catch((err) => {
+                log.error("turn failed", {
+                  sessionId: cmd.sessionId,
+                  err: err instanceof Error ? err.message : String(err),
+                });
+              });
+            }
             return ok(cmd.requestId, { events });
           }
           case "session.cancel": {
-            const ended = sessions.cancel(cmd.sessionId);
+            const ended = await sessions.cancel(cmd.sessionId);
             broadcast(cmd.sessionId, ended);
             return ok(cmd.requestId, { event: ended });
           }
@@ -212,11 +264,11 @@ export async function startOrchestrator(
             return ok(cmd.requestId, { session });
           }
           case "harness.list": {
-            // Phase 1: empty list — honest caps
-            return ok(cmd.requestId, { harnesses: [] });
+            return ok(cmd.requestId, { harnesses: adapterHost.listHarnesses() });
           }
           case "models.list": {
-            return ok(cmd.requestId, { models: [] });
+            const models = await adapterHost.listModels(cmd.harnessId);
+            return ok(cmd.requestId, { models });
           }
           case "project.create":
           case "project.list": {
@@ -227,11 +279,15 @@ export async function startOrchestrator(
             );
           }
           case "approval.respond": {
-            return fail(
-              cmd.requestId,
-              "not_implemented",
-              "Approvals require an adapter (Phase 2+)",
-            );
+            try {
+              await sessions.approve(cmd.sessionId, cmd.approvalId, cmd.decision);
+              return ok(cmd.requestId, { sessionId: cmd.sessionId, approvalId: cmd.approvalId });
+            } catch (err) {
+              if (err instanceof SessionError) {
+                return fail(cmd.requestId, err.code, err.message);
+              }
+              throw err;
+            }
           }
           default: {
             const _exhaustive: never = cmd;
@@ -268,6 +324,7 @@ export async function startOrchestrator(
   const close = async () => {
     if (closed) return;
     closed = true;
+    await adapterHost.disposeAll();
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
     });

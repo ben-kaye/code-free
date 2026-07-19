@@ -19,10 +19,26 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
 
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
-        return "Session \(id.prefix(8))"
+        return "Untitled task"
     }
 
     var isArchived: Bool { archivedAt != nil }
+
+    /// Sidebar/window title from the first user message: first line, word-aware cap.
+    static func titleFromMessage(_ text: String, maxLength: Int = 48) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Untitled task" }
+        let firstLine =
+            trimmed.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? trimmed
+        if firstLine.count <= maxLength { return firstLine }
+        let end = firstLine.index(firstLine.startIndex, offsetBy: maxLength)
+        let slice = String(firstLine[..<end])
+        if let space = slice.lastIndex(of: " "), space > slice.startIndex {
+            return String(slice[..<space]) + "…"
+        }
+        return slice + "…"
+    }
 
     init(
         id: String,

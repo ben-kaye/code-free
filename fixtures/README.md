@@ -1,5 +1,19 @@
 # Fixtures
 
-Adapter stream fixtures land in Phase 2 (`fixtures/adapters/`).
+## Phase 2 — adapter streams
 
-Phase 1 coverage is programmatic (vitest): protocol parse, store durability, orchestrator WS replay.
+Recorded ACP update lines for mapper unit tests (no live network):
+
+```
+fixtures/adapters/grok-build/
+  message-stream.jsonl
+  thinking.jsonl
+  tools.jsonl
+  plan.jsonl
+```
+
+Consumed by `@code-free/adapter-grok-build` tests (`map-update.test.ts`).
+
+## Phase 1
+
+Protocol parse, store durability, and orchestrator WS replay are programmatic (vitest), not fixture files.

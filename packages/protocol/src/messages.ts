@@ -77,6 +77,14 @@ export const SessionCreateSchema = z.object({
 export const SessionListSchema = z.object({
   kind: z.literal("session.list"),
   requestId: z.string().min(1),
+  /** Default active. Archived sessions are soft-deleted and purged after 7 days. */
+  filter: z.enum(["active", "archived"]).optional(),
+});
+
+export const SessionArchiveSchema = z.object({
+  kind: z.literal("session.archive"),
+  requestId: z.string().min(1),
+  sessionId: z.string().min(1),
 });
 
 export const SessionSubscribeSchema = z.object({
@@ -153,6 +161,7 @@ export const ProjectListSchema = z.object({
 export const ClientCommandSchema = z.discriminatedUnion("kind", [
   SessionCreateSchema,
   SessionListSchema,
+  SessionArchiveSchema,
   SessionSubscribeSchema,
   SessionUnsubscribeSchema,
   SessionSendSchema,

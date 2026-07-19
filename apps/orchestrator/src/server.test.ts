@@ -27,7 +27,7 @@ afterEach(async () => {
   }
 }, 30_000);
 
-async function boot(): Promise<RunningOrch> {
+async function boot(opts?: Parameters<typeof startOrchestrator>[2]): Promise<RunningOrch> {
   const root = tempDir();
   const orch = await startOrchestrator(
     {
@@ -38,6 +38,7 @@ async function boot(): Promise<RunningOrch> {
       logDir: join(root, "logs"),
     },
     new Logger(join(root, "logs")),
+    opts,
   );
   running.push(orch);
   return orch;
@@ -126,9 +127,11 @@ describe("orchestrator WS", () => {
       const tokenFile = join(root, "token");
       const logDir = join(root, "logs");
 
+      // Empty adapters: honest no_adapter path (Phase 1 / offline).
       let orch = await startOrchestrator(
         { dataRoot, bindHost: "127.0.0.1", bindPort: 0, tokenFile, logDir },
         new Logger(logDir),
+        { adapters: [] },
       );
       running.push(orch);
 
@@ -188,6 +191,7 @@ describe("orchestrator WS", () => {
       orch = await startOrchestrator(
         { dataRoot, bindHost: "127.0.0.1", bindPort: 0, tokenFile, logDir },
         new Logger(logDir),
+        { adapters: [] },
       );
       running.push(orch);
 
@@ -220,13 +224,96 @@ describe("orchestrator WS", () => {
   );
 
   it("fail-closed on unknown command", async () => {
-    const orch = await boot();
+    const orch = await boot({ adapters: [] });
     const client = await TestClient.connect(orch.endpoint);
     await auth(client, orch.token);
     client.send({ kind: "session.explode", requestId: "x" });
     const err = (await client.next()) as { kind: string; code: string };
     expect(err.kind).toBe("error");
     expect(err.code).toBe("unknown_command");
+    client.close();
+  });
+
+  it("mock adapter streams turn events and lists harness", async () => {
+    const { AdapterError } = await import("@code-free/adapter-core");
+    type Cap = import("@code-free/protocol").Cap;
+    type EventSink = import("@code-free/adapter-core").EventSink;
+    type HarnessAdapter = import("@code-free/adapter-core").HarnessAdapter;
+    type TaskSpec = import("@code-free/adapter-core").TaskSpec;
+
+    const mock: HarnessAdapter = {
+      id: "mock",
+      name: "Mock",
+      caps: ["streaming_text"] satisfies Cap[],
+      async start(_spec: TaskSpec, sink: EventSink) {
+        return {
+          async send(text: string) {
+            sink.emit({ type: "message.delta", payload: { id: "a", text: `echo:${text}` } });
+            sink.emit({ type: "message.done", payload: { id: "a" } });
+          },
+          async cancel() {},
+          async dispose() {},
+        };
+      },
+    };
+
+    // silence unused
+    void AdapterError;
+
+    const orch = await boot({ adapters: [mock] });
+    const client = await TestClient.connect(orch.endpoint);
+    await auth(client, orch.token);
+
+    client.send({ kind: "harness.list", requestId: "h1" });
+    const harnessResult = (await client.next()) as {
+      ok: boolean;
+      data: { harnesses: Array<{ id: string }> };
+    };
+    expect(harnessResult.ok).toBe(true);
+    expect(harnessResult.data.harnesses.map((h) => h.id)).toEqual(["mock"]);
+
+    client.send({
+      kind: "session.create",
+      requestId: "c1",
+      cwd: "/tmp/proj",
+    });
+    const created = (await client.next()) as {
+      ok: boolean;
+      data: { session: { id: string; harnessId: string } };
+    };
+    expect(created.ok).toBe(true);
+    expect(created.data.session.harnessId).toBe("mock");
+    const sessionId = created.data.session.id;
+
+    client.send({
+      kind: "session.subscribe",
+      requestId: "s1",
+      sessionId,
+      afterSeq: 0,
+    });
+    await client.next(); // snapshot
+    await client.next(); // sub result
+
+    client.send({
+      kind: "session.send",
+      requestId: "send1",
+      sessionId,
+      text: "hello",
+    });
+
+    // Immediate: message.user + status.turn_start + result; then stream
+    const types: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const msg = (await client.next(8_000)) as { kind?: string; type?: string; ok?: boolean };
+      if (msg.kind === "result") continue;
+      if (msg.type) types.push(msg.type);
+      if (msg.type === "status.turn_end") break;
+    }
+    expect(types).toContain("message.user");
+    expect(types).toContain("status.turn_start");
+    expect(types).toContain("message.delta");
+    expect(types).toContain("message.done");
+    expect(types).toContain("status.turn_end");
     client.close();
   });
 });

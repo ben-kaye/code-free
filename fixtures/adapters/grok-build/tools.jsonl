@@ -1,0 +1,5 @@
+{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"Read file","kind":"read","status":"pending","rawInput":{"path":"/tmp/a.ts"}}
+{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"in_progress"}
+{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","rawOutput":{"ok":true}}
+{"sessionUpdate":"tool_call","toolCallId":"call_2","title":"Bad tool","kind":"execute","status":"pending"}
+{"sessionUpdate":"tool_call_update","toolCallId":"call_2","status":"failed","rawOutput":{"error":"boom"}}

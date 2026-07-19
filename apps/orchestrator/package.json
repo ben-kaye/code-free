@@ -16,6 +16,8 @@
     "dev": "node --import tsx src/cli.ts"
   },
   "dependencies": {
+    "@code-free/adapter-core": "workspace:*",
+    "@code-free/adapter-grok-build": "workspace:*",
     "@code-free/protocol": "workspace:*",
     "@code-free/store": "workspace:*",
     "ws": "^8.18.2"

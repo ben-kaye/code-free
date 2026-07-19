@@ -8,7 +8,7 @@ import {
   type EventDraft,
   type EventFrame,
 } from "@code-free/protocol";
-import { SCHEMA_SQL } from "./schema.js";
+import { ARCHIVE_RETENTION_MS, SCHEMA_SQL } from "./schema.js";
 
 export type SessionRow = {
   id: string;
@@ -18,6 +18,8 @@ export type SessionRow = {
   model: string | null;
   createdAt: string;
   updatedAt: string;
+  /** ISO timestamp when archived; null if active. */
+  archivedAt: string | null;
 };
 
 export type CreateSessionInput = {
@@ -35,6 +37,13 @@ export type EventStoreOptions = {
   dbName?: string;
 };
 
+export type SessionListFilter = "active" | "archived";
+
+const SESSION_SELECT = `SELECT id, title, cwd, harness_id AS harnessId, model,
+        created_at AS createdAt, updated_at AS updatedAt,
+        archived_at AS archivedAt
+ FROM sessions`;
+
 /**
  * Single-writer SQLite event log.
  * Seq is assigned only after a durable append succeeds.
@@ -49,6 +58,7 @@ export class EventStore {
     this.dbPath = join(options.dataRoot, options.dbName ?? "events.db");
     this.db = new Database(this.dbPath);
     this.db.exec(SCHEMA_SQL);
+    this.migrate();
   }
 
   close(): void {
@@ -69,11 +79,12 @@ export class EventStore {
       model: input.model ?? null,
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
     };
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, cwd, harness_id, model, created_at, updated_at)
-         VALUES (@id, @title, @cwd, @harnessId, @model, @createdAt, @updatedAt)`,
+        `INSERT INTO sessions (id, title, cwd, harness_id, model, created_at, updated_at, archived_at)
+         VALUES (@id, @title, @cwd, @harnessId, @model, @createdAt, @updatedAt, @archivedAt)`,
       )
       .run(row);
     return row;
@@ -82,32 +93,25 @@ export class EventStore {
   getSession(sessionId: string): SessionRow | null {
     this.assertOpen();
     const raw = this.db
-      .prepare(
-        `SELECT id, title, cwd, harness_id AS harnessId, model,
-                created_at AS createdAt, updated_at AS updatedAt
-         FROM sessions WHERE id = ?`,
-      )
+      .prepare(`${SESSION_SELECT} WHERE id = ?`)
       .get(sessionId) as SessionRow | undefined;
-    return raw ?? null;
+    return raw ? normalizeRow(raw) : null;
   }
 
-  listSessions(): SessionRow[] {
+  /** Active sessions by default; pass filter for archived. */
+  listSessions(filter: SessionListFilter = "active"): SessionRow[] {
     this.assertOpen();
-    return this.db
-      .prepare(
-        `SELECT id, title, cwd, harness_id AS harnessId, model,
-                created_at AS createdAt, updated_at AS updatedAt
-         FROM sessions ORDER BY updated_at DESC`,
-      )
-      .all() as SessionRow[];
+    const where =
+      filter === "active" ? "WHERE archived_at IS NULL" : "WHERE archived_at IS NOT NULL";
+    const order =
+      filter === "active" ? "ORDER BY updated_at DESC" : "ORDER BY archived_at DESC";
+    const rows = this.db.prepare(`${SESSION_SELECT} ${where} ${order}`).all() as SessionRow[];
+    return rows.map(normalizeRow);
   }
 
   renameSession(sessionId: string, title: string): SessionRow {
     this.assertOpen();
-    const existing = this.getSession(sessionId);
-    if (!existing) {
-      throw new StoreError("session_not_found", `Session not found: ${sessionId}`);
-    }
+    const existing = this.requireActiveSession(sessionId);
     const updatedAt = nowIso();
     this.db
       .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
@@ -116,15 +120,53 @@ export class EventStore {
   }
 
   /**
+   * Soft-delete: hide from active list. Permanent delete after ARCHIVE_RETENTION_MS.
+   * Idempotent if already archived.
+   */
+  archiveSession(sessionId: string): SessionRow {
+    this.assertOpen();
+    const existing = this.getSession(sessionId);
+    if (!existing) {
+      throw new StoreError("session_not_found", `Session not found: ${sessionId}`);
+    }
+    if (existing.archivedAt) {
+      return existing;
+    }
+    const archivedAt = nowIso();
+    this.db
+      .prepare(`UPDATE sessions SET archived_at = ?, updated_at = ? WHERE id = ?`)
+      .run(archivedAt, archivedAt, sessionId);
+    return { ...existing, archivedAt, updatedAt: archivedAt };
+  }
+
+  /** Hard-delete session + events (FK cascade). */
+  deleteSession(sessionId: string): boolean {
+    this.assertOpen();
+    const result = this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Permanently delete archives at or older than retention.
+   * retentionMs 0 deletes all archives (archived_at <= now).
+   * @returns number of sessions deleted
+   */
+  purgeExpiredArchives(retentionMs: number = ARCHIVE_RETENTION_MS): number {
+    this.assertOpen();
+    const cutoff = new Date(Date.now() - retentionMs).toISOString();
+    const result = this.db
+      .prepare(`DELETE FROM sessions WHERE archived_at IS NOT NULL AND archived_at <= ?`)
+      .run(cutoff);
+    return result.changes;
+  }
+
+  /**
    * Append a draft event. Assigns seq = last+1 and stamps ts after durable write.
    * Returns the full event frame.
    */
   appendEvent(sessionId: string, draft: EventDraft): EventFrame {
     this.assertOpen();
-    const session = this.getSession(sessionId);
-    if (!session) {
-      throw new StoreError("session_not_found", `Session not found: ${sessionId}`);
-    }
+    const session = this.requireActiveSession(sessionId);
 
     const type = draft.type;
     const payload = draft.payload ?? {};
@@ -148,6 +190,9 @@ export class EventStore {
       return { seq, ts };
     });
 
+    // Touch for typecheck that session exists as active
+    void session;
+
     const { seq, ts } = appendTx();
 
     const frame = EventFrameSchema.parse({
@@ -162,7 +207,7 @@ export class EventStore {
     return frame;
   }
 
-  /** Events with seq > afterSeq, ordered ascending. */
+  /** Events with seq > afterSeq, ordered ascending. Works for archived (read-only replay). */
   listEventsAfter(sessionId: string, afterSeq: number): EventFrame[] {
     this.assertOpen();
     const rows = this.db
@@ -201,6 +246,28 @@ export class EventStore {
     return row.maxSeq;
   }
 
+  private requireActiveSession(sessionId: string): SessionRow {
+    const session = this.getSession(sessionId);
+    if (!session) {
+      throw new StoreError("session_not_found", `Session not found: ${sessionId}`);
+    }
+    if (session.archivedAt) {
+      throw new StoreError("session_archived", `Session is archived: ${sessionId}`);
+    }
+    return session;
+  }
+
+  /** Add archived_at to DBs created before archive support. */
+  private migrate(): void {
+    const cols = this.db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "archived_at")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN archived_at TEXT`);
+    }
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_sessions_archived_at ON sessions(archived_at)`,
+    );
+  }
+
   private assertOpen(): void {
     if (this.closed) {
       throw new StoreError("store_closed", "EventStore is closed");
@@ -220,6 +287,13 @@ export class StoreError extends Error {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeRow(raw: SessionRow): SessionRow {
+  return {
+    ...raw,
+    archivedAt: raw.archivedAt ?? null,
+  };
 }
 
 /** Ensure parent dir exists when opening a store under a nested path. */

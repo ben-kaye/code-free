@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Shared message composer for home and in-session.
+/// Send is ⌘↩ only; Return inserts a newline in the multi-line field.
 struct ComposerView: View {
     @EnvironmentObject private var model: AppModel
     @FocusState private var focused: Bool
@@ -12,61 +14,31 @@ struct ComposerView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
+                    .accessibilityLabel("Archived task is read-only. Permanently deleted after 7 days.")
             } else {
-                HStack(alignment: .bottom, spacing: 10) {
-                    // Caps not present yet — controls shown disabled, never fake approve
-                    Button {} label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(true)
-                    .help("Attachments — not available yet")
-
-                    TextField("Message", text: $model.composerText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...8)
-                        .focused($focused)
-                        .onSubmit {
-                            if !NSEvent.modifierFlags.contains(.shift) {
-                                model.sendMessage()
-                            }
-                        }
-
-                    Button {
-                        model.sendMessage()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                            .symbolRenderingMode(.hierarchical)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!canSend)
-                    .keyboardShortcut(.return, modifiers: [.command])
-                    .help("Send (⌘↩)")
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                MessageComposerField(
+                    text: $model.composerText,
+                    placeholder: "Message",
+                    canSend: canSend,
+                    isSending: model.isSending,
+                    focused: $focused,
+                    onSend: { model.sendMessage() }
+                )
 
                 HStack {
-                    Label("Approve", systemImage: "checkmark.shield")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .help("Approvals require a harness adapter")
-                    Spacer()
-                    if let session = model.selectedSession {
-                        WorkspaceChip(workspacePath: session.cwd)
-                    }
-                    Text("Local")
+                    Text("⌘↩ to send · Return for newline")
                         .font(.caption2)
-                        .foregroundStyle(.quaternary)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
                 }
                 .padding(.horizontal, 4)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .onAppear { if !isArchived { focused = true } }
+        .onAppear {
+            if !isArchived { focused = true }
+        }
     }
 
     private var isArchived: Bool {
@@ -79,5 +51,66 @@ struct ComposerView: View {
         guard !isArchived else { return false }
         guard !model.isSending else { return false }
         return !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+// MARK: - Shared field
+
+struct MessageComposerField: View {
+    @Binding var text: String
+    var placeholder: String
+    var canSend: Bool
+    var isSending: Bool
+    var focused: FocusState<Bool>.Binding
+    var onSend: () -> Void
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField(placeholder, text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .lineLimit(1...10)
+                .focused(focused)
+                .disabled(isSending)
+                .accessibilityLabel(placeholder)
+                .accessibilityHint("Press Command Return to send. Return inserts a new line.")
+
+            Button(action: onSend) {
+                ZStack {
+                    if isSending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 30, height: 30)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(canSend ? Color.white : Color.secondary)
+                            .frame(width: 30, height: 30)
+                            .background(
+                                canSend ? Color.accentColor : Color.primary.opacity(0.08),
+                                in: Circle()
+                            )
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend || isSending)
+            .keyboardShortcut(.return, modifiers: [.command])
+            .help("Send (⌘↩)")
+            .accessibilityLabel(isSending ? "Sending" : "Send message")
+            .accessibilityHint("Command Return")
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    focused.wrappedValue ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.10),
+                    lineWidth: focused.wrappedValue ? 1.5 : 1
+                )
+        )
     }
 }

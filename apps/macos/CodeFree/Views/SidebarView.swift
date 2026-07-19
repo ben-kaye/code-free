@@ -5,11 +5,16 @@ struct SidebarView: View {
     @EnvironmentObject private var workspaces: WorkspaceStore
     /// Paths the user has collapsed; absent paths default to expanded.
     @State private var collapsedProjects: Set<String> = []
+    @State private var archivedExpanded = false
+    @State private var sessionPendingArchive: SessionSummary?
+    @State private var projectPendingClose: String?
+    @State private var renameTarget: SessionSummary?
+    @State private var renameDraft = ""
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Code Free")
+                Text("Tasks")
                     .font(.headline)
                 Spacer()
             }
@@ -28,6 +33,8 @@ struct SidebarView: View {
             .padding(.bottom, 8)
             .disabled(!isReady)
             .keyboardShortcut("n", modifiers: [.command])
+            .help("New task (⌘N)")
+            .accessibilityLabel("New task")
 
             List(selection: Binding(
                 get: { model.selectedSessionId },
@@ -41,7 +48,11 @@ struct SidebarView: View {
                                     SessionRow(
                                         session: session,
                                         showPath: false,
-                                        onArchive: { model.archiveSession(session.id) }
+                                        onArchive: { sessionPendingArchive = session },
+                                        onRename: {
+                                            renameTarget = session
+                                            renameDraft = session.title ?? session.displayTitle
+                                        }
                                     )
                                     .tag(session.id)
                                 }
@@ -50,7 +61,7 @@ struct SidebarView: View {
                                     path: group.path,
                                     name: workspaceName(for: group.path),
                                     count: group.sessions.count,
-                                    onClose: { model.closeProject(path: group.path) }
+                                    onClose: { projectPendingClose = group.path }
                                 )
                             }
                         }
@@ -63,12 +74,21 @@ struct SidebarView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .listRowSeparator(.hidden)
+                    } else if model.recentSessionsUnlisted.isEmpty {
+                        Text("Tasks are listed under Projects above")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .listRowSeparator(.hidden)
                     } else {
-                        ForEach(model.sessions.prefix(20)) { session in
+                        ForEach(model.recentSessionsUnlisted) { session in
                             SessionRow(
                                 session: session,
                                 showPath: true,
-                                onArchive: { model.archiveSession(session.id) }
+                                onArchive: { sessionPendingArchive = session },
+                                onRename: {
+                                    renameTarget = session
+                                    renameDraft = session.title ?? session.displayTitle
+                                }
                             )
                             .tag(session.id)
                         }
@@ -76,15 +96,25 @@ struct SidebarView: View {
                 }
 
                 if !model.archivedSessions.isEmpty {
-                    Section("Archived") {
-                        ForEach(model.archivedSessions) { session in
-                            SessionRow(
-                                session: session,
-                                showPath: true,
-                                showArchiveHint: true
-                            )
-                            .tag(session.id)
-                            .foregroundStyle(.secondary)
+                    Section {
+                        DisclosureGroup(isExpanded: $archivedExpanded) {
+                            ForEach(model.archivedSessions) { session in
+                                SessionRow(
+                                    session: session,
+                                    showPath: true,
+                                    showArchiveHint: true
+                                )
+                                .tag(session.id)
+                                .foregroundStyle(.secondary)
+                            }
+                        } label: {
+                            HStack {
+                                Text("Archived")
+                                Spacer()
+                                Text("\(model.archivedSessions.count)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                 }
@@ -103,8 +133,70 @@ struct SidebarView: View {
             .padding(.vertical, 10)
             .disabled(!isReady)
             .help("Add a workspace folder")
+            .accessibilityLabel("New project")
         }
         .background(.background)
+        .confirmationDialog(
+            "Archive this task?",
+            isPresented: Binding(
+                get: { sessionPendingArchive != nil },
+                set: { if !$0 { sessionPendingArchive = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: sessionPendingArchive
+        ) { session in
+            Button("Archive", role: .destructive) {
+                model.archiveSession(session.id)
+                sessionPendingArchive = nil
+            }
+            Button("Cancel", role: .cancel) {
+                sessionPendingArchive = nil
+            }
+        } message: { session in
+            Text(
+                "“\(session.displayTitle)” moves to Archived and is permanently deleted after 7 days. There is no undo after that."
+            )
+        }
+        .confirmationDialog(
+            "Close this project?",
+            isPresented: Binding(
+                get: { projectPendingClose != nil },
+                set: { if !$0 { projectPendingClose = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Close project", role: .destructive) {
+                if let path = projectPendingClose {
+                    model.closeProject(path: path)
+                }
+                projectPendingClose = nil
+            }
+            Button("Cancel", role: .cancel) {
+                projectPendingClose = nil
+            }
+        } message: {
+            Text("The project leaves the sidebar. Existing tasks stay under Recents.")
+        }
+        .alert(
+            "Rename Task",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )
+        ) {
+            TextField("Title", text: $renameDraft)
+            Button("Save") {
+                if let id = renameTarget?.id {
+                    model.renameSession(id, title: renameDraft)
+                }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) {
+                renameTarget = nil
+            }
+        } message: {
+            Text("Choose a short name for this task.")
+        }
     }
 
     private func workspaceName(for path: String) -> String {
@@ -157,6 +249,7 @@ struct WorkspaceGroupLabel: View {
         HStack(spacing: 6) {
             Image(systemName: "folder")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(name)
                 .lineLimit(1)
             Spacer(minLength: 4)
@@ -167,12 +260,13 @@ struct WorkspaceGroupLabel: View {
             }
         }
         .help(path)
+        .accessibilityLabel("\(name), \(count) tasks")
         .contextMenu {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             }
             Divider()
-            Button("Close Project") {
+            Button("Close project…") {
                 onClose?()
             }
         }
@@ -184,14 +278,15 @@ struct SessionRow: View {
     var showPath: Bool = true
     var showArchiveHint: Bool = false
     var onArchive: (() -> Void)?
+    var onRename: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(session.displayTitle)
                 .font(.body)
                 .lineLimit(1)
-            if showPath {
-                Text(shortPath(session.cwd))
+            if showPath, let caption = pathCaption {
+                Text(caption)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -205,17 +300,36 @@ struct SessionRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
+            if let onRename, !session.isArchived {
+                Button("Rename…") { onRename() }
+            }
             if let onArchive {
-                Button("Archive Task", role: .destructive) {
+                Divider()
+                Button("Archive task…", role: .destructive) {
                     onArchive()
                 }
             }
         }
         .help(showArchiveHint ? "Archived — permanently deleted after 7 days" : session.displayTitle)
+        .accessibilityLabel(accessibilityText)
     }
 
-    private func shortPath(_ path: String) -> String {
-        Workspace.displayPath(path)
+    private var accessibilityText: String {
+        var parts = [session.displayTitle]
+        if showPath, let caption = pathCaption {
+            parts.append(caption)
+        }
+        if showArchiveHint, let label = retentionLabel {
+            parts.append(label)
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Hide useless captions (`~` alone or empty).
+    private var pathCaption: String? {
+        let short = Workspace.displayPath(session.cwd)
+        if short.isEmpty || short == "~" { return nil }
+        return short
     }
 
     /// Days left until orch purges this archive (7-day retention).
@@ -230,9 +344,10 @@ struct SessionRow: View {
         }
         guard let date else { return "Deletes in 7 days" }
         let deadline = date.addingTimeInterval(7 * 24 * 60 * 60)
-        let days = max(0, Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 0)
-        if days <= 0 { return "Deletes soon" }
-        if days == 1 { return "Deletes in 1 day" }
+        let remaining = deadline.timeIntervalSince(Date())
+        if remaining <= 0 { return "Deletes soon" }
+        let days = Int(ceil(remaining / (24 * 60 * 60)))
+        if days <= 1 { return "Deletes in 1 day" }
         return "Deletes in \(days) days"
     }
 }

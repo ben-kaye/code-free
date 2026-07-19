@@ -52,6 +52,27 @@ describe("parseClientCommand", () => {
     expect(cmd.kind).toBe("session.create");
   });
 
+  it("accepts session.archive", () => {
+    const cmd = parseClientCommand({
+      kind: "session.archive",
+      requestId: "r1",
+      sessionId: "s1",
+    });
+    expect(cmd.kind).toBe("session.archive");
+  });
+
+  it("accepts session.list with archived filter", () => {
+    const cmd = parseClientCommand({
+      kind: "session.list",
+      requestId: "r1",
+      filter: "archived",
+    });
+    expect(cmd.kind).toBe("session.list");
+    if (cmd.kind === "session.list") {
+      expect(cmd.filter).toBe("archived");
+    }
+  });
+
   it("fail-closed on unknown command kind", () => {
     try {
       parseClientCommand({ kind: "session.explode", requestId: "r1" });
