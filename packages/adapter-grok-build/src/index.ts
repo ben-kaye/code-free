@@ -7,5 +7,11 @@ export {
 } from "./adapter.js";
 export { mapAcpUpdate, extractText } from "./map-update.js";
 export { resolveGrokBinary } from "./resolve-binary.js";
-export { listGrokModels, STATIC_GROK_MODELS } from "./models.js";
+export {
+  listGrokModels,
+  STATIC_GROK_MODELS,
+  encodeModelRef,
+  parseModelRef,
+  MODEL_EFFORT_SEP,
+} from "./models.js";
 export { AcpClient, type AcpClientHandlers, type JsonRpcMessage } from "./acp-client.js";

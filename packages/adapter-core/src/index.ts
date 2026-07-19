@@ -2,6 +2,7 @@ export type {
   EventSink,
   TaskSpec,
   ModelInfo,
+  ReasoningEffortInfo,
   AdapterRun,
   HarnessAdapter,
   AdapterErrorCode,

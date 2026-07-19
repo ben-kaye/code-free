@@ -9,7 +9,7 @@ import {
 import type { Cap } from "@code-free/protocol";
 import { AcpClient } from "./acp-client.js";
 import { mapAcpUpdate } from "./map-update.js";
-import { listGrokModels } from "./models.js";
+import { listGrokModels, parseModelRef } from "./models.js";
 import { resolveGrokBinary } from "./resolve-binary.js";
 
 export const GROK_BUILD_ID = "grok-build";
@@ -67,9 +67,15 @@ async function startGrokRun(
 
   const agentArgs = options.agentArgs ?? [];
   const args = ["agent", ...agentArgs, "stdio"];
-  if (spec.model) {
-    // `grok agent --model X stdio`
-    args.splice(1, 0, "--model", spec.model);
+  // Model ref may be `id` or `id#effort` (matrix selection stored on the session).
+  const { modelId, reasoningEffort } = parseModelRef(spec.model);
+  if (modelId) {
+    // `grok agent --model X [--reasoning-effort Y] stdio`
+    args.splice(1, 0, "--model", modelId);
+  }
+  if (reasoningEffort) {
+    const insertAt = modelId ? 3 : 1;
+    args.splice(insertAt, 0, "--reasoning-effort", reasoningEffort);
   }
 
   let child: ChildProcessWithoutNullStreams;

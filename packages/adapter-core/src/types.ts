@@ -20,15 +20,35 @@ export type EventSink = {
 export type TaskSpec = {
   sessionId: string;
   cwd: string;
+  /**
+   * Model id, or composite `id#effort` when thinking level is selected.
+   * Adapters that support effort parse the suffix; unknown suffixes are ignored.
+   */
   model?: string;
   /** Harness-side session id when resuming (e.g. Grok ACP sessionId). */
   resumeToken?: string;
   extra?: Record<string, unknown>;
 };
 
+/** One selectable thinking / reasoning effort for a model (X-axis of the picker matrix). */
+export type ReasoningEffortInfo = {
+  id: string;
+  label?: string;
+  /** True when this is the harness default for the model. */
+  default?: boolean;
+};
+
+/**
+ * Model catalog entry from adapter `listModels`.
+ * Rows in the shell matrix; optional `reasoningEfforts` are the thinking-level columns.
+ */
 export type ModelInfo = {
   id: string;
   name?: string;
+  /** When present and non-empty, shell shows a thinking-level axis. */
+  reasoningEfforts?: ReasoningEffortInfo[];
+  /** Preferred effort id when the user has not chosen one. */
+  defaultReasoningEffort?: string;
 };
 
 /**
