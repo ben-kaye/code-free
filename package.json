@@ -1,0 +1,21 @@
+{
+  "name": "code-free",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Code Free — harness-agnostic coding shell (orchestrator + protocol)",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm --filter @code-free/protocol build && pnpm --filter @code-free/store build && pnpm --filter @code-free/orchestrator build",
+    "typecheck": "pnpm run build && pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "orch": "pnpm --filter @code-free/orchestrator start"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "@types/node": "^24.0.0"
+  }
+}

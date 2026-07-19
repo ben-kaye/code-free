@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+.coverage/
+coverage/
+.turbo/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+.pnpm-store/
+tmp/
+.temp/
+data/

@@ -1,0 +1,29 @@
+{
+  "name": "@code-free/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "code-free-orch": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "start": "node --import tsx src/cli.ts",
+    "dev": "node --import tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@code-free/protocol": "workspace:*",
+    "@code-free/store": "workspace:*",
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
