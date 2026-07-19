@@ -17,6 +17,8 @@ struct ContentView: View {
             InspectorView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 340)
         }
+        // Side-by-side columns — not overlay. Overlay style dismisses panels on content click.
+        .navigationSplitViewStyle(.balanced)
         .navigationTitle(model.windowTitle)
         .toolbar {
             // Healthy = quiet. Only show orch status while starting or failed.
@@ -62,14 +64,6 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: model.banner)
         .onChange(of: model.windowTitle) { _, title in
             NSApp.keyWindow?.title = title
-        }
-        .onChange(of: model.selectedSessionId) { _, id in
-            // Home / no session: collapse empty inspector so the composer owns the canvas.
-            if id == nil, columnVisibility == .all {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    columnVisibility = .doubleColumn
-                }
-            }
         }
         .onAppear {
             NSApp.keyWindow?.title = model.windowTitle
