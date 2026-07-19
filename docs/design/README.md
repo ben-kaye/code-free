@@ -11,5 +11,9 @@
 | 7 | [open](./07-open-questions.md) |
 
 ```
-SwiftUI.app → Node orch → adapter → harness
+SwiftUI.app (platform shell) → Node orch → adapter → harness
 ```
+
+Platform-specific behavior stays in the shell; orch/adapters speak protocol only. Seams: [stack](./02-tech-stack.md) · [wiring](./03-wiring.md).
+
+**Production-ready from day one** — narrow scope, durable design (no throwaway IPC/store/protocol). Bar: [vision](./01-vision.md).

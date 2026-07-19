@@ -2,6 +2,12 @@
 
 Orch stamps `sessionId, seq, ts`. Adapters omit seq/ts.
 
+**Transport:** standard WebSocket text frames, one JSON object per message (localhost + token). Do not invent a custom framing layer; UDS later keeps the same JSON envelopes.
+
+**Schema:** `packages/protocol` (zod) is source of truth; export JSON Schema for docs/Swift. Message *shapes* are ours; parsing/validation/WS/SQLite are libraries.
+
+**Production wire rules:** validate every client command; stamp `seq` only after durable append (or equivalent crash-safe ordering); unknown event *types* may be ignored by clients; unknown/invalid *commands* rejected; never break monotonic seq; `protocolVersion` negotiated on `hello`.
+
 ## Server → client
 
 `hello | snapshot | event | error`
