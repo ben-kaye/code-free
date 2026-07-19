@@ -6,6 +6,9 @@ struct ComposerView: View {
     @EnvironmentObject private var model: AppModel
     @FocusState private var focused: Bool
 
+    /// Soft prompt-cache idle window used by several providers (not a hard SLA).
+    private static let idleWarningSeconds: TimeInterval = 5 * 60
+
     var body: some View {
         VStack(spacing: 8) {
             if isArchived {
@@ -16,6 +19,8 @@ struct ComposerView: View {
                     .padding(.horizontal, 4)
                     .accessibilityLabel("Archived task is read-only. Permanently deleted after 7 days.")
             } else {
+                idleWarning
+
                 MessageComposerField(
                     text: $model.composerText,
                     placeholder: "Message",
@@ -45,6 +50,25 @@ struct ComposerView: View {
         }
     }
 
+    /// Show when the selected task has been idle ≥ 5 minutes (heuristic for cold prompt cache).
+    @ViewBuilder
+    private var idleWarning: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            if isIdle(at: context.date) {
+                Text(
+                    "Idle 5+ minutes — next reply may be slower or cost more while context is reprocessed."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+                .accessibilityLabel(
+                    "Idle five or more minutes. Next reply may be slower or cost more while context is reprocessed."
+                )
+            }
+        }
+    }
+
     private var isArchived: Bool {
         model.selectedSession?.isArchived == true
     }
@@ -62,6 +86,22 @@ struct ComposerView: View {
         guard !isArchived else { return false }
         guard !model.isSending else { return false }
         return !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func isIdle(at now: Date) -> Bool {
+        guard !model.transcript.isEmpty, !model.isSending else { return false }
+        guard let raw = model.selectedSession?.updatedAt, let last = Self.parseISO(raw) else {
+            return false
+        }
+        return now.timeIntervalSince(last) >= Self.idleWarningSeconds
+    }
+
+    private static func parseISO(_ string: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: string) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: string)
     }
 }
 

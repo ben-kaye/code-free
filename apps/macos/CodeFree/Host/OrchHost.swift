@@ -1,6 +1,10 @@
+import Darwin
 import Foundation
 
 /// Shell-owned sidecar lifecycle. Orch never chooses Mac paths.
+///
+/// Hybrid lifecycle: idle quit → SIGTERM; busy quit → leave orch running and reattach
+/// on next launch via endpoint file + token (design: wiring § Host contract).
 final class OrchHost: @unchecked Sendable {
     struct Paths: Sendable {
         let appSupport: URL
@@ -33,31 +37,43 @@ final class OrchHost: @unchecked Sendable {
         let endpoint: URL
         let token: String
         let pid: Int32
+        /// True when this host owns a Process and should SIGTERM it on idle stop.
+        let owned: Bool
     }
 
     private var process: Process?
+    private var attachedPid: Int32?
     private var stdoutPipe: Pipe?
     private let lock = NSLock()
 
     var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return process?.isRunning == true
+        if let process, process.isRunning { return true }
+        if let pid = attachedPid, Self.isProcessAlive(pid) { return true }
+        return false
     }
 
-    /// Launch orchestrator and return endpoint + token. Token is never logged.
+    /// Launch or reattach to orchestrator. Token is never logged.
     func start(paths: Paths) throws -> LaunchInfo {
         lock.lock()
         defer { lock.unlock() }
 
         if let existing = process, existing.isRunning {
-            // Reattach path: reuse token file + last endpoint if present
-            if let info = try? readLaunchInfo(paths: paths, pid: existing.processIdentifier) {
+            if let info = try? readLaunchInfo(paths: paths, pid: existing.processIdentifier, owned: true) {
                 return info
             }
         }
 
-        try stopLocked()
+        // Hybrid reattach: prior quit left orch running (busy turn).
+        if let reattached = try? tryReattach(paths: paths) {
+            process = nil
+            attachedPid = reattached.pid
+            stdoutPipe = nil
+            return reattached
+        }
+
+        try stopLocked(leaveRunning: false)
 
         let launch = try resolveOrchLaunch()
         let proc = Process()
@@ -69,22 +85,19 @@ final class OrchHost: @unchecked Sendable {
             "--bind", "127.0.0.1:0",
         ]
         proc.environment = ProcessInfo.processInfo.environment
-        // New process group so SIGTERM reaches the whole tree (node + children)
         proc.qualityOfService = .userInitiated
 
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = Pipe() // discard stderr to pipe to avoid blocking; logs go to log-dir
+        proc.standardError = Pipe() // discard stderr; logs go to log-dir
         stdoutPipe = pipe
 
         try proc.run()
         process = proc
+        attachedPid = proc.processIdentifier
 
         let endpointLine = try readEndpointLine(from: pipe, process: proc)
         let payload = try parseEndpointPayload(endpointLine)
-
-        // Persist for reattach
-        try endpointLine.data(using: .utf8)?.write(to: paths.endpointFile, options: .atomic)
 
         let token = try String(contentsOf: paths.tokenFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -95,19 +108,39 @@ final class OrchHost: @unchecked Sendable {
             throw HostError.badEndpoint(payload.endpoint)
         }
 
-        return LaunchInfo(endpoint: url, token: token, pid: proc.processIdentifier)
+        // Persist endpoint + pid for reattach after busy quit.
+        try writeEndpointFile(
+            paths: paths,
+            endpoint: payload.endpoint,
+            tokenFile: paths.tokenFile.path,
+            pid: proc.processIdentifier
+        )
+
+        return LaunchInfo(
+            endpoint: url,
+            token: token,
+            pid: proc.processIdentifier,
+            owned: true
+        )
     }
 
-    func stop() {
+    /// Stop sidecar. When `leaveRunning` is true (active turn), keep the process and endpoint file.
+    func stop(leaveRunning: Bool = false) {
         lock.lock()
         defer { lock.unlock() }
-        try? stopLocked()
+        try? stopLocked(leaveRunning: leaveRunning)
     }
 
-    private func stopLocked() throws {
-        guard let proc = process else { return }
-        if proc.isRunning {
-            // Prefer graceful SIGTERM
+    private func stopLocked(leaveRunning: Bool) throws {
+        if leaveRunning {
+            // Detach without SIGTERM so a busy harness keeps running.
+            process = nil
+            stdoutPipe = nil
+            // Keep attachedPid / endpoint.json for reattach.
+            return
+        }
+
+        if let proc = process, proc.isRunning {
             proc.terminate()
             let deadline = Date().addingTimeInterval(3)
             while proc.isRunning && Date() < deadline {
@@ -116,9 +149,118 @@ final class OrchHost: @unchecked Sendable {
             if proc.isRunning {
                 proc.interrupt()
             }
+        } else if let pid = attachedPid, Self.isProcessAlive(pid) {
+            // Reattached external orch — terminate by pid.
+            kill(pid, SIGTERM)
+            let deadline = Date().addingTimeInterval(3)
+            while Self.isProcessAlive(pid) && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if Self.isProcessAlive(pid) {
+                kill(pid, SIGKILL)
+            }
         }
+
         process = nil
+        attachedPid = nil
         stdoutPipe = nil
+    }
+
+    // MARK: - Reattach
+
+    /// If endpoint.json points at a live loopback orch, reuse it (do not spawn a second writer).
+    private func tryReattach(paths: Paths) throws -> LaunchInfo {
+        let info = try readPersistedEndpoint(paths: paths)
+        if let pid = info.pid, !Self.isProcessAlive(pid) {
+            throw HostError.orchExitedEarly
+        }
+        guard Self.isEndpointReachable(info.endpoint) else {
+            throw HostError.endpointTimeout
+        }
+        let token = try String(contentsOf: paths.tokenFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw HostError.tokenUnreadable
+        }
+        return LaunchInfo(
+            endpoint: info.endpoint,
+            token: token,
+            pid: info.pid ?? 0,
+            owned: false
+        )
+    }
+
+    private struct PersistedEndpoint {
+        let endpoint: URL
+        let pid: Int32?
+    }
+
+    private func readPersistedEndpoint(paths: Paths) throws -> PersistedEndpoint {
+        let line = try String(contentsOf: paths.endpointFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = try parseEndpointPayload(line)
+        guard let url = URL(string: payload.endpoint) else {
+            throw HostError.badEndpoint(payload.endpoint)
+        }
+        return PersistedEndpoint(endpoint: url, pid: payload.pid)
+    }
+
+    private func writeEndpointFile(
+        paths: Paths,
+        endpoint: String,
+        tokenFile: String,
+        pid: Int32
+    ) throws {
+        let obj: [String: Any] = [
+            "endpoint": endpoint,
+            "tokenFile": tokenFile,
+            "pid": pid,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+        try data.write(to: paths.endpointFile, options: .atomic)
+    }
+
+    /// TCP connect probe — cheap liveness before WS hello.
+    static func isEndpointReachable(_ url: URL, timeout: TimeInterval = 0.4) -> Bool {
+        guard let host = url.host, let port = url.port else { return false }
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { return false }
+        defer { close(sock) }
+
+        // Non-blocking connect with short poll.
+        let flags = fcntl(sock, F_GETFL, 0)
+        _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(UInt16(port).bigEndian)
+        guard host.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
+            return false
+        }
+
+        let result = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if result == 0 { return true }
+        if errno != EINPROGRESS { return false }
+
+        var pfd = pollfd(fd: sock, events: Int16(POLLOUT), revents: 0)
+        let ms = Int32(timeout * 1000)
+        let pr = poll(&pfd, 1, ms)
+        guard pr > 0, (pfd.revents & Int16(POLLOUT)) != 0 else { return false }
+
+        var err: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &len)
+        return err == 0
+    }
+
+    static func isProcessAlive(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0
     }
 
     // MARK: - Resolve binary
@@ -133,7 +275,6 @@ final class OrchHost: @unchecked Sendable {
         let env = ProcessInfo.processInfo.environment
 
         if let custom = env["CODE_FREE_ORCH"], !custom.isEmpty {
-            // CODE_FREE_ORCH may be a shell command string or absolute path to node script
             if custom.contains(" ") {
                 return OrchLaunch(executable: "/bin/zsh", arguments: ["-lc", custom])
             }
@@ -154,7 +295,6 @@ final class OrchHost: @unchecked Sendable {
                 )
             }
             if FileManager.default.fileExists(atPath: srcCli.path) {
-                // Prefer package start via pnpm for workspace deps
                 if let pnpm = which("pnpm") {
                     return OrchLaunch(
                         executable: pnpm,
@@ -209,8 +349,6 @@ final class OrchHost: @unchecked Sendable {
         if let env = ProcessInfo.processInfo.environment["PWD"] {
             candidates.append(URL(fileURLWithPath: env))
         }
-        // When run from Xcode, SRCROOT is useful if injected; also check common path next to DerivedData is hopeless —
-        // rely on CODE_FREE_REPO_ROOT or cwd.
         for start in candidates {
             var url = start
             for _ in 0..<8 {
@@ -231,6 +369,7 @@ final class OrchHost: @unchecked Sendable {
     private struct EndpointPayload: Decodable {
         let endpoint: String
         let tokenFile: String?
+        let pid: Int32?
     }
 
     private func readEndpointLine(from pipe: Pipe, process: Process) throws -> String {
@@ -265,16 +404,11 @@ final class OrchHost: @unchecked Sendable {
         return try JSONDecoder().decode(EndpointPayload.self, from: data)
     }
 
-    private func readLaunchInfo(paths: Paths, pid: Int32) throws -> LaunchInfo {
-        let line = try String(contentsOf: paths.endpointFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let payload = try parseEndpointPayload(line)
+    private func readLaunchInfo(paths: Paths, pid: Int32, owned: Bool) throws -> LaunchInfo {
+        let persisted = try readPersistedEndpoint(paths: paths)
         let token = try String(contentsOf: paths.tokenFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: payload.endpoint) else {
-            throw HostError.badEndpoint(payload.endpoint)
-        }
-        return LaunchInfo(endpoint: url, token: token, pid: pid)
+        return LaunchInfo(endpoint: persisted.endpoint, token: token, pid: pid, owned: owned)
     }
 }
 

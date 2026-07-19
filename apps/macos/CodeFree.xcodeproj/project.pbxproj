@@ -25,6 +25,7 @@
 		A3145A91DC9FDD44BC2B2F0B /* TranscriptRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98C42377633C5E4E000F42CA /* TranscriptRows.swift */; };
 		AEA385159024BBD625D1F7BE /* UserBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 617507E1286D1CC30BA52346 /* UserBannerTests.swift */; };
 		B8B09262695F2B92D0112E95 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BCDC5B49777E970DEA10B5C /* SidebarView.swift */; };
+		BDD30AF4C64D9915653F845C /* OrchHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDF06757FCBC98E2B32D677 /* OrchHostTests.swift */; };
 		CA8E2F1F261BD9511C006A2A /* OrchHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52519465DE5B702A2166146B /* OrchHost.swift */; };
 		CEB887E561102B29C0DA7C26 /* ButtonStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C041220196B90D79C20309 /* ButtonStyles.swift */; };
 		D67C1C904C04CAEBAB9DE5EB /* InspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F82277DC517489EF553AB04 /* InspectorView.swift */; };
@@ -71,6 +72,7 @@
 		C690796BD9F1D5A0A6B53181 /* TranscriptReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptReducer.swift; sourceTree = "<group>"; };
 		D66507A09A87776D8038257E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		F7969B65E08F67FC9E5E4D16 /* OrchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchClient.swift; sourceTree = "<group>"; };
+		FEDF06757FCBC98E2B32D677 /* OrchHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchHostTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -172,6 +174,7 @@
 			isa = PBXGroup;
 			children = (
 				4E4B0D8ACC8DE2C02547055E /* ModelRefTests.swift */,
+				FEDF06757FCBC98E2B32D677 /* OrchHostTests.swift */,
 				4A05E8DF2359921E0A33F3C7 /* SessionTitleTests.swift */,
 				692981D3D180300B0863DA43 /* TranscriptReducerTests.swift */,
 				617507E1286D1CC30BA52346 /* UserBannerTests.swift */,
@@ -292,6 +295,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B8EBF397E4075CBDFF76D9B /* ModelRefTests.swift in Sources */,
+				BDD30AF4C64D9915653F845C /* OrchHostTests.swift in Sources */,
 				2AB8449751C371E8D0769EDD /* SessionTitleTests.swift in Sources */,
 				985CADB97319E83EF6060DEF /* TranscriptReducerTests.swift in Sources */,
 				AEA385159024BBD625D1F7BE /* UserBannerTests.swift in Sources */,

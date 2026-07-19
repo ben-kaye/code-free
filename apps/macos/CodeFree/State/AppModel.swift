@@ -49,10 +49,15 @@ final class AppModel: ObservableObject {
     private var paths: OrchHost.Paths?
     private var subscribedSessionId: String?
     private var startTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
     /// Bumped on navigation so in-flight `startTaskFromHome` can bail after each await.
     private var taskOpGeneration: UInt64 = 0
     /// Bumped when the selected harness changes or a new models fetch starts; drops stale replies.
     private var modelsFetchGeneration: UInt64 = 0
+    /// True between status.turn_start and turn_end / session.error — drives hybrid quit.
+    private var turnActive = false
+    /// Suppress reconnect storms while bootstrap/restart owns the connection.
+    private var suppressAutoReconnect = false
 
     var selectedSession: SessionSummary? {
         sessions.first { $0.id == selectedSessionId }
@@ -172,7 +177,8 @@ final class AppModel: ObservableObject {
         return sessions.filter { !projectIds.contains($0.id) }
     }
 
-    /// Make a bookmarked project the active cwd (for New task) without opening a session.
+    /// Make a bookmarked project the active cwd and show the home composer (new task).
+    /// Does not open an existing session — folder click is "new chat here", not resume.
     func activateProject(path: String) {
         let key = Workspace.normalizePath(path)
         guard !key.isEmpty, !workspaces.isClosed(key) else { return }
@@ -183,6 +189,8 @@ final class AppModel: ObservableObject {
         } else {
             workspaces.add(path: key, select: true)
         }
+        // Clear any stale session-error banner from a previous selection race.
+        banner = nil
         newTask()
     }
 
@@ -301,20 +309,34 @@ final class AppModel: ObservableObject {
         startTask = Task { await bootstrap() }
     }
 
-    func shutdown() {
+    /// Hybrid lifecycle: leave orch running when a turn is in flight (reattach on next launch).
+    var shouldLeaveOrchRunning: Bool {
+        turnActive || isSending
+    }
+
+    /// Disconnect WS. Idle quit SIGTERM's the sidecar; busy quit leaves it running.
+    func shutdown(leaveOrchRunning: Bool? = nil) {
+        let leave = leaveOrchRunning ?? shouldLeaveOrchRunning
+        suppressAutoReconnect = true
         startTask?.cancel()
         startTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        // Host stop is sync so terminate can SIGTERM before process exit.
+        host.stop(leaveRunning: leave)
         Task {
-            await client.disconnect()
-            host.stop()
+            await client.disconnect(notify: false)
         }
     }
 
     func restart() {
-        shutdown()
+        // Forced restart always stops the sidecar, even mid-turn.
+        shutdown(leaveOrchRunning: false)
         phase = .idle
         connectionLabel = "Orchestrator offline"
         banner = nil
+        turnActive = false
+        suppressAutoReconnect = false
         startTask = Task { await bootstrap() }
     }
 
@@ -330,13 +352,13 @@ final class AppModel: ObservableObject {
         lastSeq = 0
         isLoadingTranscript = false
         subscribedSessionId = nil
+        // Turn activity is per subscribed session; home has no live turn.
+        turnActive = false
         if let prev {
+            // Leaving a task is intentional; unsubscribe is best-effort and must not
+            // surface "task is no longer available" on the home composer.
             Task {
-                do {
-                    try await client.unsubscribe(sessionId: prev)
-                } catch {
-                    presentError(error)
-                }
+                try? await client.unsubscribe(sessionId: prev)
             }
         }
     }
@@ -353,18 +375,28 @@ final class AppModel: ObservableObject {
             return
         }
         guard id != selectedSessionId else { return }
+        // Only real task ids subscribe. Sidebar project rows use path as ForEach id;
+        // List can surface that as selection — treat as "new task in this project".
+        guard let session = sessions.first(where: { $0.id == id })
+            ?? archivedSessions.first(where: { $0.id == id })
+        else {
+            let key = Workspace.normalizePath(id)
+            let isProject = workspaces.workspaces.contains {
+                Workspace.normalizePath($0.path) == key
+            } || sessionsByWorkspacePath.contains { $0.path == key }
+            if isProject {
+                activateProject(path: key)
+            }
+            return
+        }
         invalidateInFlightTaskOps()
         selectedSessionId = id
-        if let session = sessions.first(where: { $0.id == id })
-            ?? archivedSessions.first(where: { $0.id == id })
-        {
-            if let ws = workspaces.workspaces.first(where: {
-                Workspace.normalizePath($0.path) == Workspace.normalizePath(session.cwd)
-            }) {
-                workspaces.select(ws.id)
-            } else if !session.isArchived {
-                workspaces.rememberPath(session.cwd)
-            }
+        if let ws = workspaces.workspaces.first(where: {
+            Workspace.normalizePath($0.path) == Workspace.normalizePath(session.cwd)
+        }) {
+            workspaces.select(ws.id)
+        } else if !session.isArchived {
+            workspaces.rememberPath(session.cwd)
         }
         Task { await subscribe(to: id, afterSeq: 0, reset: true) }
     }
@@ -477,6 +509,8 @@ final class AppModel: ObservableObject {
         phase = .starting
         connectionLabel = "Starting orchestrator…"
         banner = nil
+        suppressAutoReconnect = true
+        defer { suppressAutoReconnect = false }
 
         do {
             let paths = try OrchHost.Paths.default()
@@ -507,16 +541,14 @@ final class AppModel: ObservableObject {
 
             connectionLabel = "Launching orchestrator…"
             let info = try host.start(paths: paths)
-
-            connectionLabel = "Connecting to orchestrator…"
+            if !info.owned {
+                connectionLabel = "Reattaching to orchestrator…"
+            } else {
+                connectionLabel = "Connecting to orchestrator…"
+            }
             try await client.connect(endpoint: info.endpoint, token: info.token)
 
-            let list = try await client.listSessions(filter: "active")
-            sessions = list.sorted { $0.updatedAt > $1.updatedAt }
-            let archived = try await client.listSessions(filter: "archived")
-            archivedSessions = archived.sorted {
-                ($0.archivedAt ?? $0.updatedAt) > ($1.archivedAt ?? $1.updatedAt)
-            }
+            try await refreshSessionLists()
             for session in sessions {
                 workspaces.rememberPath(session.cwd)
             }
@@ -530,8 +562,10 @@ final class AppModel: ObservableObject {
             }
 
             // Open on the home orchestrator. Resuming a session is an explicit sidebar click.
+            // Reattach mid-session uses afterSeq so gap-fill doesn't wipe live transcript.
             if let id = selectedSessionId {
-                await subscribe(to: id, afterSeq: 0, reset: true)
+                let after = lastSeq > 0 ? lastSeq : 0
+                await subscribe(to: id, afterSeq: after, reset: lastSeq == 0)
             }
         } catch {
             phase = .failed(error.localizedDescription)
@@ -540,14 +574,92 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func refreshSessionLists() async throws {
+        let list = try await client.listSessions(filter: "active")
+        sessions = list.sorted { $0.updatedAt > $1.updatedAt }
+        let archived = try await client.listSessions(filter: "archived")
+        archivedSessions = archived.sorted {
+            ($0.archivedAt ?? $0.updatedAt) > ($1.archivedAt ?? $1.updatedAt)
+        }
+    }
+
+    /// WS drop recovery: reattach/spawn host, reconnect, resubscribe afterSeq (gap fill).
+    private func scheduleReconnect() {
+        guard !suppressAutoReconnect else { return }
+        if reconnectTask != nil { return }
+        reconnectTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runReconnectLoop()
+            await MainActor.run { self.reconnectTask = nil }
+        }
+    }
+
+    private func runReconnectLoop() async {
+        let delaysNs: [UInt64] = [
+            300_000_000, // 0.3s
+            800_000_000,
+            1_500_000_000,
+            3_000_000_000,
+            5_000_000_000,
+        ]
+        for (attempt, delay) in delaysNs.enumerated() {
+            if Task.isCancelled || suppressAutoReconnect { return }
+            await MainActor.run {
+                self.phase = .starting
+                self.connectionLabel = attempt == 0
+                    ? "Reconnecting…"
+                    : "Reconnecting… (\(attempt + 1)/\(delaysNs.count))"
+            }
+            try? await Task.sleep(nanoseconds: delay)
+            if Task.isCancelled || suppressAutoReconnect { return }
+            do {
+                try await reconnectOnce()
+                return
+            } catch {
+                continue
+            }
+        }
+        await MainActor.run {
+            self.phase = .failed("Connection lost")
+            self.connectionLabel = "Orchestrator connection lost"
+            self.presentBanner(
+                .error("Lost connection to the local orchestrator", action: .restart)
+            )
+        }
+    }
+
+    private func reconnectOnce() async throws {
+        guard let paths else {
+            throw HostError.noAppSupport
+        }
+        suppressAutoReconnect = true
+        defer { suppressAutoReconnect = false }
+
+        let info = try host.start(paths: paths)
+        try await client.connect(endpoint: info.endpoint, token: info.token)
+        try await refreshSessionLists()
+        await refreshHarnesses()
+
+        phase = .ready
+        connectionLabel = "Orchestrator ready"
+        banner = nil
+
+        // Gap-fill: keep projected transcript; snapshot only events after lastSeq.
+        if let id = selectedSessionId {
+            await subscribe(to: id, afterSeq: lastSeq, reset: false)
+        }
+    }
+
     private func subscribe(to sessionId: String, afterSeq: Int, reset: Bool) async {
         if reset {
             isLoadingTranscript = true
             transcript = []
             lastSeq = 0
+            turnActive = false
         }
         do {
             if let prev = subscribedSessionId, prev != sessionId {
+                // Best-effort; missing session is not a user-facing failure when switching.
                 try? await client.unsubscribe(sessionId: prev)
             }
             // User may have navigated away during unsubscribe.
@@ -587,9 +699,11 @@ final class AppModel: ObservableObject {
         }
         if lastSeq == 0 {
             transcript = TranscriptReducer.reduce(snap.events)
+            recomputeTurnActive(from: snap.events)
         } else {
             for event in snap.events where event.seq > lastSeq {
                 TranscriptReducer.apply(event, to: &transcript)
+                updateTurnActive(from: event)
             }
         }
         lastSeq = max(lastSeq, snap.lastSeq)
@@ -599,6 +713,21 @@ final class AppModel: ObservableObject {
         if snap.sessionId == selectedSessionId {
             isLoadingTranscript = false
         }
+    }
+
+    private func recomputeTurnActive(from events: [EventFrame]) {
+        var active = false
+        for event in events {
+            switch event.type {
+            case "status.turn_start":
+                active = true
+            case "status.turn_end", "session.error", "session.ended":
+                active = false
+            default:
+                break
+            }
+        }
+        turnActive = active
     }
 
     private func invalidateInFlightTaskOps() {
@@ -703,6 +832,7 @@ final class AppModel: ObservableObject {
         if event.seq <= lastSeq { return }
         TranscriptReducer.apply(event, to: &transcript)
         lastSeq = event.seq
+        updateTurnActive(from: event)
 
         // Keep session list recency
         if let idx = sessions.firstIndex(where: { $0.id == event.sessionId }) {
@@ -721,6 +851,17 @@ final class AppModel: ObservableObject {
                 ),
                 at: 0
             )
+        }
+    }
+
+    private func updateTurnActive(from event: EventFrame) {
+        switch event.type {
+        case "status.turn_start":
+            turnActive = true
+        case "status.turn_end", "session.error", "session.ended":
+            turnActive = false
+        default:
+            break
         }
     }
 
@@ -743,9 +884,23 @@ final class AppModel: ObservableObject {
             connectionLabel = "Orchestrator ready"
             if case .ready = phase { banner = nil }
         case .failed:
-            connectionLabel = "Orchestrator connection lost"
-            phase = .failed("Connection lost")
-            presentBanner(.error("Lost connection to the local orchestrator", action: .restart))
+            if suppressAutoReconnect {
+                connectionLabel = "Orchestrator connection lost"
+                return
+            }
+            // Auto-resubscribe afterSeq when the live WS drops (harness may still be running).
+            if case .ready = phase {
+                phase = .starting
+                connectionLabel = "Reconnecting…"
+                scheduleReconnect()
+            } else if case .starting = phase {
+                // Mid-reconnect failure is handled by the reconnect loop.
+                connectionLabel = "Reconnecting…"
+            } else {
+                connectionLabel = "Orchestrator connection lost"
+                phase = .failed("Connection lost")
+                presentBanner(.error("Lost connection to the local orchestrator", action: .restart))
+            }
         }
     }
 }

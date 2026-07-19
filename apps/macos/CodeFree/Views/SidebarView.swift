@@ -256,21 +256,32 @@ struct WorkspaceGroupLabel: View {
     var onClose: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            Text(name)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            if count > 0 {
-                Text("\(count)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+        // Button captures the click so List selection cannot treat the project path
+        // as a session id (which would subscribe → session_not_found banner).
+        Button {
+            InteractionFeedback.click()
+            onSelect?()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(name)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(.plain)
         .help(path)
         .accessibilityLabel("\(name), \(count) tasks")
+        .accessibilityHint("Opens new task for this project")
         .contextMenu {
             if let onSelect {
                 Button("New task here") { onSelect() }

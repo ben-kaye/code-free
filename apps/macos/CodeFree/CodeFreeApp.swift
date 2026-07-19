@@ -43,7 +43,7 @@ struct CodeFreeApp: App {
     }
 }
 
-/// Handles terminate → stop sidecar cleanly.
+/// Handles terminate → hybrid sidecar policy (idle SIGTERM / busy leave + reattach).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
 
@@ -52,8 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        model?.shutdown()
-        // Brief window for SIGTERM flush
-        Thread.sleep(forTimeInterval: 0.35)
+        // Hybrid: active turn → leave orch; idle → SIGTERM + brief flush window.
+        let leave = model?.shouldLeaveOrchRunning ?? false
+        model?.shutdown(leaveOrchRunning: leave)
+        if !leave {
+            Thread.sleep(forTimeInterval: 0.35)
+        }
     }
 }
